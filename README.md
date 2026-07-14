@@ -31,8 +31,9 @@ böylece Colab oturumu kapansa/kopsa bile veri hazırlama adımları tekrarlanma
 
 ```
 /content/drive/MyDrive/passive-liveness-dinov2/
-├── processed/   # 02'nin çıktısı: yüz-kırpılmış görüntüler
-└── splits/      # 03'ün çıktısı: train.csv / val.csv / test.csv
+├── processed/         # 02'nin çıktısı: yüz-kırpılmış görüntüler
+├── processed_dedup/   # 02b'nin çıktısı: near-duplicate elenmiş alt küme
+└── splits/            # 03'ün çıktısı: train.csv / val.csv / test.csv
 ```
 
 ## Proje Yapısı
@@ -46,6 +47,7 @@ böylece Colab oturumu kapansa/kopsa bile veri hazırlama adımları tekrarlanma
 │   ├── 00_check_dinov2_setup.py    # Faz A.0: model yükleme + dummy forward pass doğrulama
 │   ├── 01_download_celeba_spoof.py # Faz A.1: Kaggle'dan indirme + klasör yapısı doğrulama
 │   ├── 02_extract_faces.py         # Faz A.1: yüz crop (%20 margin, 224x224) + Drive'a yazma
+│   ├── 02b_dedupe_phash.py         # Faz A.1: pHash ile near-duplicate eleme, Drive'a yazma
 │   ├── 03_build_splits.py          # Faz A.1: subject-disjoint train/val/test split (70/15/15)
 │   └── 04_stats_report.py          # Faz A.1: istatistik raporu + örnek batch görselleştirme
 ├── src/
@@ -81,13 +83,22 @@ indirilir. Bu bir topluluk mirror'ı olduğu için resmi
 # Colab hücreleri (sırayla)
 !python scripts/01_download_celeba_spoof.py --kaggle_json /content/kaggle.json
 !python scripts/02_extract_faces.py --input_dir /content/celeba_spoof_raw
-!python scripts/03_build_splits.py
+!python scripts/02b_dedupe_phash.py
+!python scripts/03_build_splits.py --processed_dir /content/drive/MyDrive/passive-liveness-dinov2/processed_dedup
 !python scripts/04_stats_report.py
 ```
 
 - `02_extract_faces.py` **resume destekler**: yarıda kesilen bir Colab oturumundan sonra
   aynı komutla tekrar çalıştırıldığında, zaten işlenmiş görüntüleri atlar. Hızlı
   smoke test için `--limit 50` kullanılabilir.
+- `02b_dedupe_phash.py`, fine-tuning veri hacmini azaltmak için eklendi: aynı
+  `(subject_id, label)` grubu içinde perceptual hash (pHash) ile neredeyse
+  birebir aynı görüntüleri (aynı çekim oturumunun art arda kareleri gibi) eler.
+  Sadece "1. aşama" (ucuz, GPU'suz) dedup — orijinal `processed/` klasörünü
+  değiştirmez, tutulan alt kümeyi ayrı bir Drive klasörüne (`processed_dedup/`)
+  kopyalar, böylece sonucu beğenmezsen orijinal veri seti hep geri dönülebilir
+  durumda kalır. `--threshold` (varsayılan 5) ile agresiflik ayarlanır — daha
+  düşük değer daha az eler.
 - `03_build_splits.py`, subject kümesi üzerinde 70/15/15 böler ve her subject'in
   tüm görüntülerini aynı split'e atar; assert'lerle train/val/test arasında
   subject overlap olmadığını doğrular.

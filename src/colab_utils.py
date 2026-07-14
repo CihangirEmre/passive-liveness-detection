@@ -50,6 +50,10 @@ def default_splits_dir(project_root: str = DEFAULT_DRIVE_PROJECT_ROOT) -> Path:
     return Path(project_root) / "splits"
 
 
+def default_processed_dedup_dir(project_root: str = DEFAULT_DRIVE_PROJECT_ROOT) -> Path:
+    return Path(project_root) / "processed_dedup"
+
+
 def default_raw_dir(project_root: str = DEFAULT_DRIVE_PROJECT_ROOT) -> Path:
     """Ham indirilmis (henuz face-crop uygulanmamis) veri Drive'a degil,
     Colab session storage'a (/content) yazilir — buyuk (~10GB+) ve tekrar
