@@ -215,28 +215,43 @@ def extract_zip(zip_path: Path, extract_to: Path, max_per_group: int = None, see
     with zipfile.ZipFile(zip_path, "r") as zf:
         names = [n for n in zf.namelist() if not n.endswith("/")]
 
+        # '_BB.txt' dosyalari ayri tutulur — SADECE secilen goruntunun BB'si
+        # cikarilir, tum veri setinin BB'leri degil (aksi halde ~600K kucuk
+        # dosya gereksiz yere cikarilir).
         groups = defaultdict(list)
-        non_image_names = []
+        always_include = []
+        bb_lookup = set()
 
         for name in names:
+            if name.endswith("_BB.txt"):
+                bb_lookup.add(name)
+                continue
             classified = _classify_entry(name)
             if classified is None:
-                non_image_names.append(name)
+                always_include.append(name)
                 continue
             split, subject_id, label, _filename = classified
             groups[(split, subject_id, label)].append(name)
 
-        print(f"Toplam dosya: {len(names)}, goruntu-disi/eslesmeyen: {len(non_image_names)}, "
-              f"gruplanan (subject x label) sayisi: {len(groups)}")
+        print(f"Toplam dosya: {len(names)}, gruplanan (subject x label) sayisi: {len(groups)}, "
+              f"her zaman dahil edilen (metas vb.): {len(always_include)}, BB.txt havuzu: {len(bb_lookup)}")
 
-        selected = list(non_image_names)
+        selected = list(always_include)
+        n_images = 0
         for entries in groups.values():
             entries_sorted = sorted(entries)
             n_pick = min(len(entries_sorted), max_per_group)
-            selected.extend(rng.sample(entries_sorted, n_pick))
+            for image_name in rng.sample(entries_sorted, n_pick):
+                selected.append(image_name)
+                n_images += 1
+                stem_dir = image_name.rsplit("/", 1)[0]
+                bb_name = f"{stem_dir}/{Path(image_name).stem}_BB.txt"
+                if bb_name in bb_lookup:
+                    selected.append(bb_name)
 
         print(f"Cikarilacak toplam dosya: {len(selected)} "
-              f"(goruntu-disi {len(non_image_names)} dahil, tahmini goruntu: {len(selected) - len(non_image_names)})")
+              f"(secilen goruntu: {n_images}, eslesen BB.txt: {len(selected) - n_images - len(always_include)}, "
+              f"her zaman dahil: {len(always_include)})")
 
         for name in selected:
             _extract_one(zf, name)
