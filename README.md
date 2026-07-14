@@ -15,10 +15,20 @@ Colab session storage / Google Drive'da tutulur, repo'ya dahil edilmez (`.gitign
 
 ```bash
 # Colab hücresi
-!git clone <repo-url>
-%cd passiveLivenessDetection
+!git clone https://github.com/CihangirEmre/passive-liveness-detection.git
+%cd passive-liveness-detection
 !pip install -r requirements.txt
 !python scripts/00_check_dinov2_setup.py
+```
+
+**Önemli — Drive mount:** `drive.mount()` sadece doğrudan bir notebook hücresinde çalışır;
+`!python scripts/...` ile çalıştırılan script'ler ayrı bir alt-process'te koştuğu için Colab
+kernel'inin mesajlaşma kanalına erişemez. Bu yüzden Drive gerektiren script'leri (`02_extract_faces.py`
+ve sonrası) çalıştırmadan önce **ayrı bir hücrede** şunu çalıştırın:
+
+```python
+from google.colab import drive
+drive.mount('/content/drive')
 ```
 
 ## Veri Kalıcılığı (Drive)

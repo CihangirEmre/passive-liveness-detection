@@ -8,11 +8,18 @@ adimlarinin tekrar tekrar kosulmasi gerekmez.
 Local'de (Colab disinda) calistirildiginda mount_drive() no-op'tur ve
 DEFAULT_DRIVE_PROJECT_ROOT ile ayni gorece yapida bir local klasor doner
 (smoke test / script gelistirme icin).
+
+ONEMLI: drive.mount() SADECE dogrudan bir notebook hucresinde calisir.
+"!python scripts/xxx.py" ile calistirilan script'ler ayri bir alt-process'te
+kosuyor ve Colab kernel'inin frontend'e mesaj gonderme kanalina erisemiyor —
+bu yuzden mount_drive() BURADA drive.mount() CAGIRMAZ, sadece Drive'in
+ONCEDEN (bir notebook hucresinde) mount edilmis olup olmadigini kontrol eder.
 """
 
 from pathlib import Path
 
 DEFAULT_DRIVE_PROJECT_ROOT = "/content/drive/MyDrive/passive-liveness-dinov2"
+DRIVE_MOUNT_POINT = "/content/drive/MyDrive"
 
 
 def is_colab() -> bool:
@@ -24,21 +31,24 @@ def is_colab() -> bool:
 
 
 def mount_drive(project_root: str = DEFAULT_DRIVE_PROJECT_ROOT) -> Path:
-    """Colab'da calisiyorsa Google Drive'i /content/drive'a baglar ve proje
-    kok klasorunu (yoksa) olusturur. Local'de calisiyorsa sadece klasoru
-    olusturur, mount islemi atlanir.
+    """Google Drive'in mount edilmis oldugunu dogrular ve proje kok klasorunu
+    (yoksa) olusturur. Local'de calisiyorsa sadece klasoru olusturur.
+
+    Drive henuz mount edilmemisse RuntimeError firlatir — cozum icin script'i
+    calistirmadan ONCE, ayri bir notebook hucresinde su iki satiri calistirin:
+
+        from google.colab import drive
+        drive.mount('/content/drive')
     """
     root = Path(project_root)
 
     if not is_colab():
-        print(f"[colab_utils] Colab disinda calisiyor, Drive mount atlaniyor. Local kok: {root}")
+        print(f"[colab_utils] Colab disinda calisiyor, Drive mount kontrolu atlaniyor. Local kok: {root}")
         root.mkdir(parents=True, exist_ok=True)
         return root
 
-    from google.colab import drive
-    drive.mount("/content/drive")
     root.mkdir(parents=True, exist_ok=True)
-    print(f"[colab_utils] Drive baglandi. Proje kok klasoru: {root}")
+    print(f"[colab_utils] Drive bagli. Proje kok klasoru: {root}")
     return root
 
 
