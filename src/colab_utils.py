@@ -65,8 +65,18 @@ def default_processed_dedup_dir(project_root: str = DEFAULT_DRIVE_PROJECT_ROOT) 
 
 
 def default_raw_dir(project_root: str = DEFAULT_DRIVE_PROJECT_ROOT) -> Path:
-    """Ham indirilmis (henuz face-crop uygulanmamis) veri Drive'a degil,
-    Colab session storage'a (/content) yazilir — buyuk (~10GB+) ve tekrar
-    uretilebilir oldugu icin Drive kotasini gereksiz yere doldurmamak icin.
+    """SECILEREK cikarilan (max_per_group ile sinirli) ham goruntuler buraya,
+    Colab session storage'a (/content) yazilir — kucuk bir alt kume oldugu
+    icin (tum veri seti degil) yerel disk sorun cikarmaz, hizli okuma saglar.
     """
     return Path("/content/celeba_spoof_raw")
+
+
+def default_raw_zip_dir(project_root: str = DEFAULT_DRIVE_PROJECT_ROOT) -> Path:
+    """CelebA-Spoof zip dosyasinin (~78GB) TAMAMI Colab'in yerel diskine
+    (tipik olarak ~60-110GB) sigmiyor. Bu yuzden zip, yerel /content yerine
+    Drive'a indirilir (Drive kotanizda yeterli alan olmasi gerekir) —
+    zipfile modulu Drive-mount edilmis dosyayi normal bir yol gibi
+    okuyabildigi icin secici extraction buradan calisir.
+    """
+    return Path(project_root) / "raw_zip"

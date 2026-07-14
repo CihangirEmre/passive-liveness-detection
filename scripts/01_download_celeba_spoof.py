@@ -5,9 +5,13 @@ CelebA-Spoof veri setini Kaggle API uzerinden indirir ve acar (Kaggle mirror,
 resmi Google Drive/Baidu dagitiminin yerine kullaniliyor). Colab'da (veya
 local'de smoke test icin) calistirilabilir.
 
-Ham veri BUYUK oldugu icin (10GB+) Colab session storage'a (/content) yazilir,
-Drive'a degil — Drive'a sadece 02_extract_faces.py'nin islenmis (yuz-kirpilmis)
-ciktisi yazilir (bkz. src/colab_utils.py).
+Gercek boyut ~78GB (Kaggle Data Explorer'dan dogrulandi) — bu, Colab'in
+tipik yerel diskine (~60-110GB, cogunlukla zaten kismen dolu) SIGMAYABILIR.
+Bu yuzden zip dosyasinin KENDISI varsayilan olarak Google Drive'a indirilir
+(bkz. src/colab_utils.default_raw_zip_dir), yerel /content'e degil — zipfile
+modulu Drive-mount edilmis dosyayi normal bir yol gibi okuyabiliyor. SADECE
+secilen (max_per_group ile sinirli) kucuk alt kume yerel /content'e
+cikarilir (hizli okuma icin). Drive'da en az ~80GB bos alan olmali.
 
 Varsayilan olarak zip'in TAMAMI acilmaz (625K+ goruntu Colab'in yerel diskini
 doldurabilir) — bunun yerine --max_per_group (varsayilan 20) ile her
@@ -15,26 +19,12 @@ doldurabilir) — bunun yerine --max_per_group (varsayilan 20) ile her
 disk sorununu cozer hem de fine-tuning veri hacmini indirme asamasinda
 azaltir. Tam veri seti isteniyorsa --max_per_group 0 verilmeli.
 
-Kaynak: https://www.kaggle.com/datasets/mabdullahsajid/celeba-spoofing
-Resmi veri seti / label semasi referansi: https://github.com/ZhangYuanhan-AI/CelebA-Spoof
-
-Onemli: Bu bir topluluk mirror'i oldugu icin klasor yapisinin resmi
-CelebA-Spoof yapisiyla (Data/<split>/<subject_id>/<live|spoof>/*.jpg +
-metas/.../train_label.txt) birebir ayni oldugu garanti degil.
-verify_extracted_structure() indirme sonrasi gercek yapiyi yazdirir —
-02/03 script'lerini calistirmadan once bu ciktiyi kontrol et.
-
-On kosullar:
-1. Kaggle hesabindan API token indirilmis olmali (kaggle.json)
-   Kaggle -> Account -> API -> Create New Token
-2. kaggle.json dosyasi ASLA repo'ya commit edilmemeli (.gitignore'da).
-
 Kullanim (Colab):
 
-    # kaggle.json'i Colab'a yukledikten sonra:
+    # kaggle.json'i Colab'a yukledikten ve Drive'i mount ettikten sonra:
     python scripts/01_download_celeba_spoof.py \
         --kaggle_json /content/kaggle.json \
-        --output_dir /content/celeba_spoof_raw
+        --max_per_group 20
 """
 
 import argparse
@@ -48,7 +38,7 @@ from collections import defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from src.colab_utils import default_raw_dir
+from src.colab_utils import default_raw_dir, default_raw_zip_dir, mount_drive
 
 DATASET_SLUG = "mabdullahsajid/celeba-spoofing"
 KAGGLE_CONFIG_DIR = Path.home() / ".kaggle"
@@ -262,16 +252,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--kaggle_json", type=str, default=None,
                          help="kaggle.json dosyasinin yolu (verilmezse ~/.kaggle/kaggle.json zaten var olmali).")
     parser.add_argument("--dataset_slug", type=str, default=DATASET_SLUG)
+    parser.add_argument("--zip_dir", type=str, default=None,
+                         help="Zip dosyasinin (~78GB) indirilecegi klasor. Verilmezse Google Drive'daki "
+                              "varsayilan yol kullanilir (yerel /content diskine sigmayabilecek kadar buyuk).")
     parser.add_argument("--output_dir", type=str, default=str(default_raw_dir()),
-                         help="Verinin indirilip acilacagi klasor.")
+                         help="SECILEN (max_per_group ile sinirli) alt kumenin cikarilacagi yerel klasor.")
     parser.add_argument("--keep_zip", action="store_true",
                          help="Belirtilirse, acma isleminden sonra zip dosyasi silinmez "
-                              "(farkli bir --max_per_group ile tekrar denemek icin yeniden indirmeyi onler).")
+                              "(farkli bir --max_per_group ile tekrar denemek icin yeniden indirmeyi onler; "
+                              "zip Drive'da oldugu icin yerel diski etkilemez, sadece Drive kotasini kullanir).")
     parser.add_argument("--max_per_group", type=int, default=20,
                          help="Her (subject_id, label) grubundan diske cikarilacak MAKSIMUM goruntu sayisi "
                               "(disk tasmasini onlemek + fine-tuning veri hacmini azaltmak icin). "
                               "0 verilirse siniri kaldirir, zip'in TAMAMI acilir.")
     parser.add_argument("--seed", type=int, default=42, help="Secici acmada grup ici rastgele secim icin seed.")
+    parser.add_argument("--compute_md5", action="store_true",
+                         help="Belirtilirse zip'in MD5'ini hesaplar (78GB'lik dosyada Drive uzerinden yavas "
+                              "olabilir, varsayilan olarak kapali).")
     return parser.parse_args()
 
 
@@ -289,8 +286,16 @@ def main() -> None:
 
     ensure_kaggle_cli_installed()
 
-    zip_path = download_dataset(output_dir, args.dataset_slug)
-    print(f"Zip MD5: {compute_md5(zip_path)}  (kayit icin not al — sonraki indirmelerde karsilastirmak icin kullanilabilir)")
+    if args.zip_dir:
+        zip_dir = Path(args.zip_dir)
+    else:
+        drive_root = mount_drive()
+        zip_dir = default_raw_zip_dir(str(drive_root))
+
+    zip_path = download_dataset(zip_dir, args.dataset_slug)
+
+    if args.compute_md5:
+        print(f"Zip MD5: {compute_md5(zip_path)}  (kayit icin not al — sonraki indirmelerde karsilastirmak icin kullanilabilir)")
 
     extract_zip(zip_path, output_dir, max_per_group=args.max_per_group, seed=args.seed)
     verify_extracted_structure(output_dir)
@@ -298,9 +303,12 @@ def main() -> None:
     if not args.keep_zip:
         zip_path.unlink()
         print(f"Zip silindi: {zip_path}")
+    else:
+        print(f"Zip saklandi (Drive kotasini kullaniyor, yerel diski etkilemiyor): {zip_path}")
 
     print("\n--- Tamamlandi ---")
-    print(f"Veri klasoru: {output_dir}")
+    print(f"Zip klasoru (Drive): {zip_dir}")
+    print(f"Secilen alt kume (yerel): {output_dir}")
 
 
 if __name__ == "__main__":

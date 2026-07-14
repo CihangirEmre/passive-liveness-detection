@@ -41,9 +41,10 @@ böylece Colab oturumu kapansa/kopsa bile veri hazırlama adımları tekrarlanma
 
 ```
 /content/drive/MyDrive/passive-liveness-dinov2/
-├── processed/         # 02'nin çıktısı: yüz-kırpılmış görüntüler
-├── processed_dedup/   # 02b'nin çıktısı: near-duplicate elenmiş alt küme
-└── splits/            # 03'ün çıktısı: train.csv / val.csv / test.csv
+├── raw_zip/            # 01'in indirdiği CelebA-Spoof zip'i (~78GB, yerel diske sığmaz)
+├── processed/          # 02'nin çıktısı: yüz-kırpılmış görüntüler
+├── processed_dedup/    # 02b'nin çıktısı: near-duplicate elenmiş alt küme
+└── splits/             # 03'ün çıktısı: train.csv / val.csv / test.csv
 ```
 
 ## Proje Yapısı
@@ -84,24 +85,26 @@ CLS token `(1, 768)` ve patch tokens `(1, num_patches, 768)` boyutları doğrula
 ## Faz A.1 — Veri Pipeline (CelebA-Spoof, Colab üzerinde)
 
 Veri seti [Kaggle mirror](https://www.kaggle.com/datasets/mabdullahsajid/celeba-spoofing) üzerinden
-indirilir. Bu bir topluluk mirror'ı olduğu için resmi
-[CelebA-Spoof](https://github.com/ZhangYuanhan-AI/CelebA-Spoof) klasör yapısıyla
-(`Data/<split>/<subject_id>/<live|spoof>/*.jpg`) birebir aynı olduğu garanti değil —
-**01'in `verify_extracted_structure` çıktısını indirme sonrası mutlaka kontrol edin.**
+indirilir. Klasör yapısı (`CelebA_Spoof/Data/<split>/<subject_id>/<live|spoof>/*.jpg`,
+`CelebA_Spoof/metas/intra_test/train_label.txt`) Kaggle Data Explorer'dan doğrulandı —
+resmi [CelebA-Spoof](https://github.com/ZhangYuanhan-AI/CelebA-Spoof) yapısıyla birebir aynı.
 
-**Disk notu:** `01_download_celeba_spoof.py` zip'in TAMAMINI açmaz — bu, CelebA-Spoof'un
-tam boyutuyla (625K+ görüntü) Colab'ın yerel diskini (`/content`) doldurabildiği için
-kasıtlı bir tasarım. Bunun yerine `--max_per_group` (varsayılan **20**) ile her
-`(subject_id, label)` grubundan seed'li rastgele seçimle en fazla N görüntü ZIP'in
-içinden doğrudan seçilip çıkarılır — geri kalanına hiç dokunulmaz. Bu hem disk sorununu
-çözer hem de fine-tuning veri hacmini indirme aşamasında azaltır (~10.000 subject × 2
-label × 20 ≈ üst sınır, gerçek toplam gruplardaki gerçek görüntü sayısına göre daha az
-çıkar). Tam veri seti isteniyorsa `--max_per_group 0` verilmeli. `metas/` klasörü
-(label dosyaları) boyut fark etmeksizin her zaman eksiksiz çıkarılır.
+**Disk notu (önemli):** Veri seti **~78GB** — Colab'ın tipik yerel diskine (`/content`,
+~60-110GB, genelde zaten kısmen dolu) sığmayabilir. Bu yüzden:
+
+1. Zip dosyasının **kendisi** yerel diske değil, **Google Drive'a** indirilir
+   (`--zip_dir` verilmezse otomatik, Drive'da en az ~80GB boş alan gerekir).
+2. Zip'in TAMAMI da açılmaz — `--max_per_group` (varsayılan **20**) ile her
+   `(subject_id, label)` grubundan seed'li rastgele seçimle en fazla N görüntü
+   zip'in içinden doğrudan seçilip **yerel** `/content`'e çıkarılır (küçük bir alt
+   küme olduğu için sorun çıkarmaz, hızlı okunur). Bu hem disk sorununu çözer hem de
+   fine-tuning veri hacmini indirme aşamasında azaltır. Tam veri seti isteniyorsa
+   `--max_per_group 0` verilmeli. `metas/` klasörü (label dosyaları) boyut fark
+   etmeksizin her zaman eksiksiz çıkarılır.
 
 ```bash
-# Colab hücreleri (sırayla)
-!python scripts/01_download_celeba_spoof.py --kaggle_json /content/kaggle.json
+# Colab hücreleri (sırayla — Drive'ın önceden mount edilmiş olması gerekir, yukarıya bakın)
+!python scripts/01_download_celeba_spoof.py --kaggle_json /content/kaggle.json --max_per_group 20
 !python scripts/02_extract_faces.py --input_dir /content/celeba_spoof_raw
 !python scripts/02b_dedupe_phash.py
 !python scripts/03_build_splits.py --processed_dir /content/drive/MyDrive/passive-liveness-dinov2/processed_dedup
