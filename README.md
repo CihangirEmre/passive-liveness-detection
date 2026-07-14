@@ -89,6 +89,16 @@ indirilir. Bu bir topluluk mirror'ı olduğu için resmi
 (`Data/<split>/<subject_id>/<live|spoof>/*.jpg`) birebir aynı olduğu garanti değil —
 **01'in `verify_extracted_structure` çıktısını indirme sonrası mutlaka kontrol edin.**
 
+**Disk notu:** `01_download_celeba_spoof.py` zip'in TAMAMINI açmaz — bu, CelebA-Spoof'un
+tam boyutuyla (625K+ görüntü) Colab'ın yerel diskini (`/content`) doldurabildiği için
+kasıtlı bir tasarım. Bunun yerine `--max_per_group` (varsayılan **20**) ile her
+`(subject_id, label)` grubundan seed'li rastgele seçimle en fazla N görüntü ZIP'in
+içinden doğrudan seçilip çıkarılır — geri kalanına hiç dokunulmaz. Bu hem disk sorununu
+çözer hem de fine-tuning veri hacmini indirme aşamasında azaltır (~10.000 subject × 2
+label × 20 ≈ üst sınır, gerçek toplam gruplardaki gerçek görüntü sayısına göre daha az
+çıkar). Tam veri seti isteniyorsa `--max_per_group 0` verilmeli. `metas/` klasörü
+(label dosyaları) boyut fark etmeksizin her zaman eksiksiz çıkarılır.
+
 ```bash
 # Colab hücreleri (sırayla)
 !python scripts/01_download_celeba_spoof.py --kaggle_json /content/kaggle.json

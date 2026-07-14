@@ -9,6 +9,12 @@ Ham veri BUYUK oldugu icin (10GB+) Colab session storage'a (/content) yazilir,
 Drive'a degil — Drive'a sadece 02_extract_faces.py'nin islenmis (yuz-kirpilmis)
 ciktisi yazilir (bkz. src/colab_utils.py).
 
+Varsayilan olarak zip'in TAMAMI acilmaz (625K+ goruntu Colab'in yerel diskini
+doldurabilir) — bunun yerine --max_per_group (varsayilan 20) ile her
+(subject_id, label) grubundan en fazla N goruntu SECILEREK cikarilir. Bu hem
+disk sorununu cozer hem de fine-tuning veri hacmini indirme asamasinda
+azaltir. Tam veri seti isteniyorsa --max_per_group 0 verilmeli.
+
 Kaynak: https://www.kaggle.com/datasets/mabdullahsajid/celeba-spoofing
 Resmi veri seti / label semasi referansi: https://github.com/ZhangYuanhan-AI/CelebA-Spoof
 
@@ -33,10 +39,12 @@ Kullanim (Colab):
 
 import argparse
 import hashlib
+import random
 import shutil
 import subprocess
 import sys
 import zipfile
+from collections import defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -45,6 +53,7 @@ from src.colab_utils import default_raw_dir
 DATASET_SLUG = "mabdullahsajid/celeba-spoofing"
 KAGGLE_CONFIG_DIR = Path.home() / ".kaggle"
 KAGGLE_JSON_TARGET = KAGGLE_CONFIG_DIR / "kaggle.json"
+IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
 
 
 def setup_kaggle_credentials(kaggle_json_path: Path) -> None:
@@ -133,11 +142,81 @@ def compute_md5(path: Path, chunk_size: int = 8 * 1024 * 1024) -> str:
     return h.hexdigest()
 
 
-def extract_zip(zip_path: Path, extract_to: Path) -> None:
-    print(f"Aciliyor: {zip_path} -> {extract_to}")
+def _classify_entry(name: str):
+    """Zip entry adini ayristirir. 'Data/<split>/<subject_id>/<live|spoof>/<file>'
+    desenine uyan bir goruntuyse (split, subject_id, label, filename) doner,
+    uymuyorsa None doner (metas/ dosyalari, ust seviye dosyalar vb. icin).
+    """
+    parts = [p for p in name.replace("\\", "/").split("/") if p]
+    lower_parts = [p.lower() for p in parts]
+
+    if "data" not in lower_parts:
+        return None
+    data_idx = lower_parts.index("data")
+    remainder = parts[data_idx + 1:]
+    if len(remainder) != 4:
+        return None
+
+    split, subject_id, label, filename = remainder
+    if label.lower() not in ("live", "spoof"):
+        return None
+    if Path(filename).suffix.lower() not in IMAGE_EXTS:
+        return None
+
+    return split, subject_id, label.lower(), filename
+
+
+def extract_zip(zip_path: Path, extract_to: Path, max_per_group: int = None, seed: int = 42) -> None:
+    """max_per_group verilmezse (None/0) zip'in TAMAMINI acar.
+
+    Verilirse, SECICI acma yapar: her (split, subject_id, label) grubundan en
+    fazla `max_per_group` goruntuyu (seed'li rastgele secim) zip'in icinden
+    diske cikarir, geri kalanina hic dokunmaz. Bu, disk dolmasini onlemenin
+    yani sira fine-tuning veri hacmini de indirme asamasinda azaltir — CelebA-
+    Spoof'un TAMAMINI (625K+ goruntu) diske acmaya gerek kalmaz.
+    metas/ gibi goruntu-disi dosyalar (label txt'leri) her zaman TAMAMEN
+    cikarilir (kucukler, kaybedilmemeli).
+    """
+    if not max_per_group:
+        print(f"Aciliyor (TAMAMI): {zip_path} -> {extract_to}")
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            zf.extractall(extract_to)
+        print("Acma tamamlandi.")
+        return
+
+    print(f"Aciliyor (SECICI, grup basina en fazla {max_per_group} goruntu): {zip_path} -> {extract_to}")
+    rng = random.Random(seed)
+
     with zipfile.ZipFile(zip_path, "r") as zf:
-        zf.extractall(extract_to)
-    print("Acma tamamlandi.")
+        names = [n for n in zf.namelist() if not n.endswith("/")]
+
+        groups = defaultdict(list)
+        non_image_names = []
+
+        for name in names:
+            classified = _classify_entry(name)
+            if classified is None:
+                non_image_names.append(name)
+                continue
+            split, subject_id, label, _filename = classified
+            groups[(split, subject_id, label)].append(name)
+
+        print(f"Toplam dosya: {len(names)}, goruntu-disi/eslesmeyen: {len(non_image_names)}, "
+              f"gruplanan (subject x label) sayisi: {len(groups)}")
+
+        selected = list(non_image_names)
+        for entries in groups.values():
+            entries_sorted = sorted(entries)
+            n_pick = min(len(entries_sorted), max_per_group)
+            selected.extend(rng.sample(entries_sorted, n_pick))
+
+        print(f"Cikarilacak toplam dosya: {len(selected)} "
+              f"(goruntu-disi {len(non_image_names)} dahil, tahmini goruntu: {len(selected) - len(non_image_names)})")
+
+        for name in selected:
+            zf.extract(name, extract_to)
+
+    print("Secici acma tamamlandi.")
 
 
 def verify_extracted_structure(extract_to: Path, max_depth: int = 4) -> None:
@@ -186,7 +265,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output_dir", type=str, default=str(default_raw_dir()),
                          help="Verinin indirilip acilacagi klasor.")
     parser.add_argument("--keep_zip", action="store_true",
-                         help="Belirtilirse, acma isleminden sonra zip dosyasi silinmez.")
+                         help="Belirtilirse, acma isleminden sonra zip dosyasi silinmez "
+                              "(farkli bir --max_per_group ile tekrar denemek icin yeniden indirmeyi onler).")
+    parser.add_argument("--max_per_group", type=int, default=20,
+                         help="Her (subject_id, label) grubundan diske cikarilacak MAKSIMUM goruntu sayisi "
+                              "(disk tasmasini onlemek + fine-tuning veri hacmini azaltmak icin). "
+                              "0 verilirse siniri kaldirir, zip'in TAMAMI acilir.")
+    parser.add_argument("--seed", type=int, default=42, help="Secici acmada grup ici rastgele secim icin seed.")
     return parser.parse_args()
 
 
@@ -207,7 +292,7 @@ def main() -> None:
     zip_path = download_dataset(output_dir, args.dataset_slug)
     print(f"Zip MD5: {compute_md5(zip_path)}  (kayit icin not al — sonraki indirmelerde karsilastirmak icin kullanilabilir)")
 
-    extract_zip(zip_path, output_dir)
+    extract_zip(zip_path, output_dir, max_per_group=args.max_per_group, seed=args.seed)
     verify_extracted_structure(output_dir)
 
     if not args.keep_zip:
