@@ -1,0 +1,33 @@
+# Veri seti (indirme scriptleriyle yeniden olusturulur, repo'ya konmaz)
+data/
+*.jpg
+*.jpeg
+*.png
+*.zip
+*.csv
+
+# Ama .gitkeep gibi placeholder dosyalar kalsin
+!.gitkeep
+
+# Model checkpoint / agirliklar
+*.pt
+*.pth
+*.safetensors
+checkpoints/
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+venv/
+.env
+
+# Colab / Jupyter
+*.log
+
+# Deneysel log/izleme araclari
+wandb/
+runs/
+
+# Butun .md dosyalari localde kalsin (README ve plan dosyasi haric, force-add edilir)
+*.md
