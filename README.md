@@ -90,25 +90,41 @@ indirilir. Klasör yapısı (`CelebA_Spoof/Data/<split>/<subject_id>/<live|spoof
 resmi [CelebA-Spoof](https://github.com/ZhangYuanhan-AI/CelebA-Spoof) yapısıyla birebir aynı.
 
 **Disk notu (önemli):** Veri seti **~78GB** — Colab'ın tipik yerel diskine (`/content`,
-~60-110GB, genelde zaten kısmen dolu) sığmayabilir. Bu yüzden:
-
-1. Zip dosyasının **kendisi** yerel diske değil, **Google Drive'a** indirilir
-   (`--zip_dir` verilmezse otomatik, Drive'da en az ~80GB boş alan gerekir).
-2. Zip'in TAMAMI da açılmaz — `--max_per_group` (varsayılan **20**) ile her
-   `(subject_id, label)` grubundan seed'li rastgele seçimle en fazla N görüntü
-   zip'in içinden doğrudan seçilip **yerel** `/content`'e çıkarılır (küçük bir alt
-   küme olduğu için sorun çıkarmaz, hızlı okunur). Bu hem disk sorununu çözer hem de
-   fine-tuning veri hacmini indirme aşamasında azaltır. Tam veri seti isteniyorsa
-   `--max_per_group 0` verilmeli. `metas/` klasörü (label dosyaları) boyut fark
-   etmeksizin her zaman eksiksiz çıkarılır.
+~60-110GB, genelde zaten kısmen dolu) sığmıyor; Drive'a indirmek de bazı ortamlarda
+yine yerel diski dolduruyor (kaggle CLI/Drive FUSE geçici olarak yerelde tamponluyor
+gibi görünüyor). Bu yüzden **varsayılan indirme modu `files`**: zip'i HİÇ indirmeden,
+Kaggle'ın dosya listesi API'sinden (`kaggle datasets files`) alınan tam dosya
+listesinden sadece seçilen görüntüleri (+ eşleşen `_BB.txt` — CelebA-Spoof'un önceden
+hesapladığı yüz kutusu — ve `metas/` label dosyaları) **tek tek, paralel** indirir.
+Disk kullanımı sadece seçilen alt küme kadardır.
 
 ```bash
-# Colab hücreleri (sırayla — Drive'ın önceden mount edilmiş olması gerekir, yukarıya bakın)
-!python scripts/01_download_celeba_spoof.py --kaggle_json /content/kaggle.json --max_per_group 20
+# Colab hücreleri (sırayla)
+!python scripts/01_download_celeba_spoof.py --kaggle_json /content/kaggle.json --max_per_group 5 --workers 8
 !python scripts/02_extract_faces.py --input_dir /content/celeba_spoof_raw
 !python scripts/02b_dedupe_phash.py
 !python scripts/03_build_splits.py --processed_dir /content/drive/MyDrive/passive-liveness-dinov2/processed_dedup
 !python scripts/04_stats_report.py
+```
+
+- `--max_per_group` (varsayılan **5**): her `(subject_id, label)` grubundan seed'li
+  rastgele seçimle en fazla N görüntü. Çok dosyalı tek-tek indirme yavaş olduğu için
+  düşük tutuldu — pipeline'ı doğrulamak ve Faz A.2.1 (linear probing) için yeterli;
+  gerekirse büyütülüp tekrar çalıştırılabilir (zaten indirilenler `--output_dir`'de
+  varsa atlanır, resume desteklenir).
+- `--workers` (varsayılan 8): paralel indirme thread sayısı.
+- `--skip_bb`: `_BB.txt` (önceden hesaplanmış yüz kutusu) dosyalarını indirmeyi kapatır
+  (varsayılan: indirilir, küçük ve `02`'de kendi yüz tespitimizi atlamamıza yardımcı
+  olabilir).
+- Dosya listesi (`kaggle datasets files`) yerelde CSV olarak önbelleklenir — script
+  kesilip tekrar çalıştırılırsa listeyi tekrar çekmez.
+- Daha eski/hızlı `--mode zip` yolu da mevcut (tüm zip'i indirip seçici açar) —
+  yeterli Drive/disk alanı olan ortamlarda (~80GB+) kullanılabilir, ama disk
+  sorunlarına karşı garantili değil.
+
+```bash
+# Alternatif: zip modu (yeterli disk/Drive alanı varsa daha hizli)
+!python scripts/01_download_celeba_spoof.py --kaggle_json /content/kaggle.json --mode zip --max_per_group 20
 ```
 
 - `02_extract_faces.py` **resume destekler**: yarıda kesilen bir Colab oturumundan sonra

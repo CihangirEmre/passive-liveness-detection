@@ -28,14 +28,19 @@ Kullanim (Colab):
 """
 
 import argparse
+import csv
 import hashlib
 import random
 import shutil
 import subprocess
 import sys
+import uuid
 import zipfile
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+
+from tqdm import tqdm
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.colab_utils import default_raw_dir, default_raw_zip_dir, mount_drive
@@ -156,6 +161,24 @@ def _classify_entry(name: str):
     return split, subject_id, label.lower(), filename
 
 
+def _normalized_rel_path(name: str) -> Path:
+    """Bir dosya yolunu ('CelebA_Spoof/Data/train/10001/live/x.png' gibi)
+    'Data'/'data' veya 'metas' klasorunden ITIBAREN gorece yola cevirir —
+    ustteki 'CelebA_Spoof/' gibi sarmalayici klasor adi ne olursa olsun
+    (degisebilir, mirror'a gore farkli olabilir) SONUC HEP AYNI olur:
+    <root>/Data/... veya <root>/metas/... Bu normalizasyon olmadan,
+    zip-mode ve files-mode farkli klasor derinliklerinde cikti uretebilir
+    ve 02_extract_faces.py'nin 'input_dir/Data' aramasi basarisiz olur.
+    """
+    parts = [p for p in name.replace("\\", "/").split("/") if p]
+    lower_parts = [p.lower() for p in parts]
+    for anchor in ("data", "metas"):
+        if anchor in lower_parts:
+            idx = lower_parts.index(anchor)
+            return Path(*parts[idx:])
+    return Path(*parts)
+
+
 def extract_zip(zip_path: Path, extract_to: Path, max_per_group: int = None, seed: int = 42) -> None:
     """max_per_group verilmezse (None/0) zip'in TAMAMINI acar.
 
@@ -166,11 +189,23 @@ def extract_zip(zip_path: Path, extract_to: Path, max_per_group: int = None, see
     Spoof'un TAMAMINI (625K+ goruntu) diske acmaya gerek kalmaz.
     metas/ gibi goruntu-disi dosyalar (label txt'leri) her zaman TAMAMEN
     cikarilir (kucukler, kaybedilmemeli).
+
+    Cikti yollari _normalized_rel_path ile normalize edilir (zip'in ust
+    seviye sarmalayici klasoru ne olursa olsun cikti hep <extract_to>/Data/...
+    ve <extract_to>/metas/... olur).
     """
+    def _extract_one(zf: zipfile.ZipFile, name: str) -> None:
+        dest = extract_to / _normalized_rel_path(name)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with zf.open(name) as src, open(dest, "wb") as dst:
+            shutil.copyfileobj(src, dst)
+
     if not max_per_group:
-        print(f"Aciliyor (TAMAMI): {zip_path} -> {extract_to}")
+        print(f"Aciliyor (TAMAMI, path normalize edilerek): {zip_path} -> {extract_to}")
         with zipfile.ZipFile(zip_path, "r") as zf:
-            zf.extractall(extract_to)
+            for name in zf.namelist():
+                if not name.endswith("/"):
+                    _extract_one(zf, name)
         print("Acma tamamlandi.")
         return
 
@@ -204,7 +239,7 @@ def extract_zip(zip_path: Path, extract_to: Path, max_per_group: int = None, see
               f"(goruntu-disi {len(non_image_names)} dahil, tahmini goruntu: {len(selected) - len(non_image_names)})")
 
         for name in selected:
-            zf.extract(name, extract_to)
+            _extract_one(zf, name)
 
     print("Secici acma tamamlandi.")
 
@@ -247,6 +282,169 @@ def verify_extracted_structure(extract_to: Path, max_depth: int = 4) -> None:
     print("--- Kesif tamamlandi, yukaridaki yollari gozden gecir ---\n")
 
 
+def list_dataset_files(dataset_slug: str, cache_csv_path: Path) -> list:
+    """Kaggle'dan (VERI INDIRMEDEN, sadece dosya listesi/meta veri) TAM dosya
+    listesini ceker ve yerel bir CSV'ye onbelleklendirir — script kesilip
+    tekrar calistirilirsa (resume) ayni listeyi tekrar cekmeye gerek kalmaz.
+    """
+    if cache_csv_path.exists():
+        print(f"Dosya listesi onbellekte bulundu, tekrar cekilmiyor: {cache_csv_path}")
+    else:
+        print(f"Dosya listesi cekiliyor (tek seferlik meta veri istegi, veri indirmez): {dataset_slug} ...")
+        result = subprocess.run(
+            ["kaggle", "datasets", "files", "-d", dataset_slug, "--csv"],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"Dosya listesi cekilemedi:\n{result.stderr.strip()}")
+        cache_csv_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_csv_path.write_text(result.stdout, encoding="utf-8")
+
+    with open(cache_csv_path, newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    print(f"Toplam {len(rows)} dosya listelendi.")
+    return rows
+
+
+def build_file_selection(rows: list, max_per_group: int, seed: int, include_bb: bool):
+    """Dosya listesini (split, subject_id, label) gruplarina ayirir, her
+    gruptan en fazla max_per_group goruntuyu secer. include_bb=True ise
+    secilen her goruntunun eslesen '<isim>_BB.txt' (CelebA-Spoof'un onceden
+    hesapladigi yuz kutusu) dosyasini da secime ekler — boylece 02'de kendi
+    yuz tespitimizi calistirmaya gerek kalmayabilir.
+
+    Doner: (secilen_dosya_yollari, secilen_goruntu_sayisi, grup_sayisi)
+    """
+    all_names = {row["name"] for row in rows}
+    groups = defaultdict(list)
+
+    for row in rows:
+        name = row["name"]
+        if name.endswith("_BB.txt"):
+            continue
+        classified = _classify_entry(name)
+        if classified is None:
+            continue
+        split, subject_id, label, _filename = classified
+        groups[(split, subject_id, label)].append(name)
+
+    rng = random.Random(seed)
+    selected = []
+    n_images = 0
+
+    for entries in groups.values():
+        entries_sorted = sorted(entries)
+        n_pick = min(len(entries_sorted), max_per_group)
+        for image_path in rng.sample(entries_sorted, n_pick):
+            selected.append(image_path)
+            n_images += 1
+            if include_bb:
+                stem = Path(image_path).stem
+                bb_path = image_path.rsplit("/", 1)[0] + f"/{stem}_BB.txt"
+                if bb_path in all_names:
+                    selected.append(bb_path)
+
+    metas_paths = [row["name"] for row in rows if "metas/" in row["name"].lower()]
+    selected.extend(metas_paths)
+
+    return selected, n_images, len(groups)
+
+
+def download_single_file(dataset_slug: str, file_path: str, scratch_dir: Path, final_path: Path) -> bool:
+    """Kaggle'dan TEK bir dosyayi indirir, normalize edilmis final_path'e
+    yerlestirir. kaggle CLI tek-dosya indirmede bazen zip'e sarabildigi icin
+    (versiyona gore degisebilir) her iki durumu da ele alir — dosyayi
+    indirdikten sonra ADINA gore bulup kendimiz normalize edilmis konuma
+    tasiyoruz (kaggle'in -p altinda tam olarak nereye yazdigina guvenmiyoruz).
+    """
+    if final_path.exists():
+        return True  # resume: zaten indirilmis
+
+    job_scratch = scratch_dir / uuid.uuid4().hex
+    job_scratch.mkdir(parents=True, exist_ok=True)
+
+    try:
+        result = subprocess.run(
+            ["kaggle", "datasets", "download", "-d", dataset_slug, "-f", file_path,
+             "-p", str(job_scratch), "--force"],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            return False
+
+        basename = Path(file_path).name
+        candidates = list(job_scratch.rglob(f"{basename}*"))
+        if not candidates:
+            return False
+        src = candidates[0]
+
+        final_path.parent.mkdir(parents=True, exist_ok=True)
+        if src.suffix == ".zip":
+            with zipfile.ZipFile(src, "r") as zf:
+                names = zf.namelist()
+                if not names:
+                    return False
+                with zf.open(names[0]) as zsrc, open(final_path, "wb") as fdst:
+                    shutil.copyfileobj(zsrc, fdst)
+        else:
+            shutil.move(str(src), str(final_path))
+
+        return True
+    finally:
+        shutil.rmtree(job_scratch, ignore_errors=True)
+
+
+def run_files_mode(args: argparse.Namespace) -> None:
+    """--mode files: 78GB'lik zip'i HIC indirmeden, sadece secilen dosyalari
+    Kaggle'dan tek tek (paralel, thread pool ile) ceker. Disk kullanimi
+    secilen alt kume kadardir — zip hicbir zaman diske/Drive'a inmez.
+    """
+    output_dir = Path(args.output_dir)
+    cache_dir = Path(args.file_list_cache) if args.file_list_cache else output_dir.parent / "_file_list_cache"
+    cache_csv_path = cache_dir / f"{args.dataset_slug.replace('/', '_')}_files.csv"
+
+    rows = list_dataset_files(args.dataset_slug, cache_csv_path)
+    selected, n_images, n_groups = build_file_selection(
+        rows, max_per_group=args.max_per_group, seed=args.seed, include_bb=not args.skip_bb
+    )
+    print(f"Secildi: {n_images} goruntu, {n_groups} grup (subject x label), "
+          f"toplam {len(selected)} dosya (BB.txt ve metas dahil).")
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    scratch_dir = output_dir.parent / "_download_scratch"
+    fail_log_path = output_dir / "download_failures.txt"
+    n_ok, n_failed = 0, 0
+
+    with open(fail_log_path, "a") as fail_log, ThreadPoolExecutor(max_workers=args.workers) as pool:
+        futures = {
+            pool.submit(download_single_file, args.dataset_slug, file_path, scratch_dir,
+                        output_dir / _normalized_rel_path(file_path)): file_path
+            for file_path in selected
+        }
+
+        for future in tqdm(as_completed(futures), total=len(futures), desc="Tek tek indirme"):
+            file_path = futures[future]
+            try:
+                ok = future.result()
+            except Exception as e:  # noqa: BLE001 — tek dosyanin hatasi tum run'i durdurmamali
+                ok = False
+                fail_log.write(f"{file_path}\tEXCEPTION: {e}\n")
+            if ok:
+                n_ok += 1
+            else:
+                n_failed += 1
+                fail_log.write(f"{file_path}\tDOWNLOAD_FAILED\n")
+
+    shutil.rmtree(scratch_dir, ignore_errors=True)
+
+    print("\n--- Tamamlandi (files mode) ---")
+    print(f"Basarili: {n_ok} / {len(selected)}")
+    print(f"Basarisiz: {n_failed}  -> detaylar: {fail_log_path}")
+    print(f"Cikti klasoru: {output_dir}")
+
+    verify_extracted_structure(output_dir)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="CelebA-Spoof veri setini Kaggle'dan indirir.")
     parser.add_argument("--kaggle_json", type=str, default=None,
@@ -261,20 +459,32 @@ def parse_args() -> argparse.Namespace:
                          help="Belirtilirse, acma isleminden sonra zip dosyasi silinmez "
                               "(farkli bir --max_per_group ile tekrar denemek icin yeniden indirmeyi onler; "
                               "zip Drive'da oldugu icin yerel diski etkilemez, sadece Drive kotasini kullanir).")
-    parser.add_argument("--max_per_group", type=int, default=20,
-                         help="Her (subject_id, label) grubundan diske cikarilacak MAKSIMUM goruntu sayisi "
-                              "(disk tasmasini onlemek + fine-tuning veri hacmini azaltmak icin). "
-                              "0 verilirse siniri kaldirir, zip'in TAMAMI acilir.")
-    parser.add_argument("--seed", type=int, default=42, help="Secici acmada grup ici rastgele secim icin seed.")
+    parser.add_argument("--max_per_group", type=int, default=5,
+                         help="Her (subject_id, label) grubundan indirilecek/cikarilacak MAKSIMUM goruntu "
+                              "sayisi (disk tasmasini onlemek + fine-tuning veri hacmini azaltmak icin). "
+                              "'zip' modunda 0 verilirse siniri kaldirir, zip'in TAMAMI acilir.")
+    parser.add_argument("--seed", type=int, default=42, help="Grup ici rastgele secim icin seed.")
     parser.add_argument("--compute_md5", action="store_true",
-                         help="Belirtilirse zip'in MD5'ini hesaplar (78GB'lik dosyada Drive uzerinden yavas "
-                              "olabilir, varsayilan olarak kapali).")
+                         help="[zip modu] Belirtilirse zip'in MD5'ini hesaplar (78GB'lik dosyada Drive "
+                              "uzerinden yavas olabilir, varsayilan olarak kapali).")
+    parser.add_argument("--mode", choices=["files", "zip"], default="files",
+                         help="'files' (varsayilan): 78GB'lik zip'i HIC indirmeden, sadece secilen dosyalari "
+                              "Kaggle'dan tek tek ceker (disk-guvenli ama COK dosya oldugu icin yavas). "
+                              "'zip': tum zip'i indirip SECICI acar (hizli ama Drive'da ~80GB bos alan gerekir "
+                              "ve bazi ortamlarda zip indirmesi yine yerel diski doldurabiliyor).")
+    parser.add_argument("--workers", type=int, default=8,
+                         help="[files modu] Paralel indirme icin thread sayisi.")
+    parser.add_argument("--skip_bb", action="store_true",
+                         help="[files modu] Belirtilirse, goruntulerin '_BB.txt' (onceden hesaplanmis yuz "
+                              "kutusu) dosyalarini indirmez. Varsayilan: indirilir (kucuk, faydali).")
+    parser.add_argument("--file_list_cache", type=str, default=None,
+                         help="[files modu] Dosya listesi CSV'sinin onbelleklenecegi klasor "
+                              "(verilmezse output_dir'in yaninda otomatik olusturulur).")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    output_dir = Path(args.output_dir)
 
     # ONEMLI: kimlik bilgileri ~/.kaggle/kaggle.json'a yerlestirilmeden ONCE
     # "import kaggle" CAGRILMAMALI — kaggle paketi import edilirken kendiliginden
@@ -285,6 +495,12 @@ def main() -> None:
         check_kaggle_credentials_exist()
 
     ensure_kaggle_cli_installed()
+
+    if args.mode == "files":
+        run_files_mode(args)
+        return
+
+    output_dir = Path(args.output_dir)
 
     if args.zip_dir:
         zip_dir = Path(args.zip_dir)
