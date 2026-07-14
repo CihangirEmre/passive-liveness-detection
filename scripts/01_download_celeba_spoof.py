@@ -194,12 +194,15 @@ def main() -> None:
     args = parse_args()
     output_dir = Path(args.output_dir)
 
-    ensure_kaggle_cli_installed()
-
+    # ONEMLI: kimlik bilgileri ~/.kaggle/kaggle.json'a yerlestirilmeden ONCE
+    # "import kaggle" CAGRILMAMALI — kaggle paketi import edilirken kendiliginden
+    # kimlik dogrulamasi deniyor ve kaggle.json henuz yoksa/eskiyse burada patlar.
     if args.kaggle_json:
         setup_kaggle_credentials(Path(args.kaggle_json))
     else:
         check_kaggle_credentials_exist()
+
+    ensure_kaggle_cli_installed()
 
     zip_path = download_dataset(output_dir, args.dataset_slug)
     print(f"Zip MD5: {compute_md5(zip_path)}  (kayit icin not al — sonraki indirmelerde karsilastirmak icin kullanilabilir)")
