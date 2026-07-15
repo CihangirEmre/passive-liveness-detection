@@ -4,17 +4,18 @@ train.py
 Faz A.2.1 — Linear probing: DINOv2 backbone FROZEN, sadece Linear(768->2)
 head egitilir.
 
-Bu script'in ilk kullanim amaci SMOKE TEST'tir: veri pipeline'inin
-(split CSV -> Dataset -> DataLoader -> model -> loss -> checkpoint) Colab'da
-hatasiz uctan uca calistigini dogrulamak. Varsayilan degerler (epochs=1,
-batch_size=32, limit=1000) buna gore ayarlanmistir. Gercek A.2.1 baseline'i
-(epochs=10-15, tum veri) icin ayni script --epochs 12 --limit 0 ile, daha
-buyuk batch_size ile calistirilir.
+Varsayilan degerler artik GERCEK A.2.1 BASELINE'ina gore ayarlanmistir
+(epochs=12, batch_size=128, limit=0 -> tum veri; plan.md A.2.1 ile uyumlu:
+lr=1e-3, sadece head egitilir). Pipeline dogrulamasi (SMOKE TEST) icin
+kucuk degerlerle acikca override edilir: --epochs 1 --batch_size 32 --limit 1000.
 
-Kullanim (Colab, smoke test — Drive mount edilmis, varsayilan yollar):
+Kullanim (Colab, gercek baseline — Drive mount edilmis, varsayilan yollar, A100 onerilir):
     from google.colab import drive
     drive.mount('/content/drive')
-    !python src/train.py --limit 1000 --epochs 1
+    !python src/train.py
+
+Kullanim (smoke test — pipeline'i hizlica dogrulamak icin):
+    !python src/train.py --epochs 1 --batch_size 32 --limit 1000
 
 Kullanim (yollari acikca vererek, local veya Colab):
     python src/train.py \\
@@ -22,7 +23,7 @@ Kullanim (yollari acikca vererek, local veya Colab):
         --val_csv /content/drive/MyDrive/passive-liveness-dinov2/splits/val.csv \\
         --images_root /content/drive/MyDrive/passive-liveness-dinov2/processed_dedup \\
         --output_dir /content/drive/MyDrive/passive-liveness-dinov2/checkpoints \\
-        --limit 1000 --epochs 1
+        --epochs 12 --batch_size 128 --limit 0
 """
 
 import argparse
@@ -83,19 +84,19 @@ def run_epoch(model, loader, device, criterion, optimizer=None) -> tuple:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Faz A.2.1 linear probing (varsayilan: smoke test).")
+    parser = argparse.ArgumentParser(description="Faz A.2.1 linear probing (varsayilan: gercek baseline).")
     parser.add_argument("--train_csv", type=str, default=None)
     parser.add_argument("--val_csv", type=str, default=None)
     parser.add_argument("--images_root", type=str, default=None,
                          help="02b'nin cikti klasoru (yuz-kirpilmis + dedup edilmis goruntuler).")
     parser.add_argument("--output_dir", type=str, default=None,
                          help="Checkpoint'in yazilacagi klasor (verilmezse Drive'da 'checkpoints').")
-    parser.add_argument("--epochs", type=int, default=1, help="Smoke test icin varsayilan: 1.")
-    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--epochs", type=int, default=12, help="Plan.md A.2.1: 10-15. Smoke test icin 1 ver.")
+    parser.add_argument("--batch_size", type=int, default=128, help="Smoke test icin 32 ver.")
     parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--limit", type=int, default=1000,
-                         help="Train/val'i ilk N satirla sinirlar (smoke test). Tam veri icin 0 ver.")
-    parser.add_argument("--num_workers", type=int, default=2)
+    parser.add_argument("--limit", type=int, default=0,
+                         help="Train/val'i ilk N satirla sinirlar. Varsayilan 0 = tum veri; smoke test icin 1000 ver.")
+    parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     return parser.parse_args()
 
@@ -142,9 +143,10 @@ def main() -> None:
               f"val_loss={val_loss:.4f} val_acc={val_acc:.1%}  "
               f"({time.time() - t0:.1f}s)")
 
-    ckpt_path = output_dir / "smoketest_linear_probe.pt"
+    ckpt_name = "smoketest_linear_probe.pt" if limit is not None else "linear_probe_a2_1.pt"
+    ckpt_path = output_dir / ckpt_name
     torch.save({"head_state_dict": model.head.state_dict(), "args": vars(args)}, ckpt_path)
-    print("\n--- Smoke test tamamlandi ---")
+    print("\n--- Egitim tamamlandi ---")
     print(f"Checkpoint (backbone frozen oldugu icin sadece head kaydedildi): {ckpt_path}")
 
 
