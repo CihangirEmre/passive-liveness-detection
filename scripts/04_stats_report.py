@@ -38,7 +38,7 @@ def load_splits(splits_dir: Path) -> dict:
     return dfs
 
 
-def build_report(dfs: dict) -> str:
+def build_report(dfs: dict, splits_dir: Path) -> str:
     all_df = pd.concat(dfs.values(), ignore_index=True)
     lines = ["# Veri Seti Istatistik Raporu (Faz A.1)\n"]
 
@@ -78,6 +78,21 @@ def build_report(dfs: dict) -> str:
     for a, b, n in overlaps:
         lines.append(f"- {a} vs {b}: {n} ortak subject")
     lines.append(f"\n**Sonuc: {'PASS — subject-disjoint dogrulandi' if all_clean else 'FAIL — overlap tespit edildi!'}**")
+
+    corrections_path = splits_dir / "label_corrections.csv"
+    if corrections_path.exists():
+        corrections_df = pd.read_csv(corrections_path)
+        lines.append("\n## Bilinen Veri Duzeltmesi\n")
+        lines.append(
+            f"Kaynak Kaggle mirror'inda {len(corrections_df)} goruntude ({len(corrections_df) / len(all_df):.1%}) "
+            f"klasor yapisi (`live`/`spoof`) ile resmi CelebA-Spoof JSON metadata'si (`train_label.json` / "
+            f"`test_label.json`, spoof_type + binary_label alanlari) celisiyordu — JSON kendi icinde tutarli "
+            f"oldugu icin (spoof_type ve binary_label ayni yonde), hata mirror'in klasor yerlesiminde. "
+            f"Ornek: `Data/train/1138/live/016365.jpg` klasorde \"live\" ama JSON'da spoof_type=PC, "
+            f"binary_label=spoof diyor. `03_build_splits.py`, --metas_dir verildiginde bu goruntulerin "
+            f"etiketini JSON'a gore duzeltir (klasoru degil); duzeltilenlerin tam listesi "
+            f"`{corrections_path.name}` dosyasinda."
+        )
 
     return "\n".join(lines)
 
@@ -134,7 +149,7 @@ def main() -> None:
 
     dfs = load_splits(splits_dir)
 
-    report = build_report(dfs)
+    report = build_report(dfs, splits_dir)
     print(report)
 
     report_path = output_dir / "data_stats_report.md"

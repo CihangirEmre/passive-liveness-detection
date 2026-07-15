@@ -7,8 +7,8 @@ Split, subject_id kumesi uzerinde yapilir ve her subject'in TUM goruntuleri
 ayni split'e atanir — boylece ayni kisi hem train hem test'te olamaz.
 
 Opsiyonel: --metas_dir verilirse (01'in indirdigi ham veri icindeki metas/
-klasoru), resmi CelebA-Spoof label dosyalarindan (train_label.txt /
-test_label.txt) spoof_type/illumination/environment bilgisi de eklenir.
+klasoru), resmi CelebA-Spoof label dosyalarindan (train_label.json /
+test_label.json) spoof_type/illumination/environment bilgisi de eklenir.
 Label semasi resmi repo README'sinden dogrulanmistir
 (https://github.com/ZhangYuanhan-AI/CelebA-Spoof):
     label_vector[40] = spoof type (0=Live, 1=Photo, 2=Poster, 3=A4,
@@ -19,8 +19,16 @@ Label semasi resmi repo README'sinden dogrulanmistir
     label_vector[42] = environment
     label_vector[43] = live/spoof binary label
 Bu Kaggle mirror'inda metas/ bulunmayabilir — bu durumda spoof_type
-kolonu "unknown" ile doldurulur, binary live/spoof label (klasor
-adindan alinan, guvenilir) etkilenmez.
+kolonu "unknown" ile doldurulur, binary live/spoof label klasor
+adindan alinir.
+
+BILINEN VERI HATASI (dogrulandi): mirror'in klasor yapisi (live/spoof)
+resmi JSON metadata'siyla ~149 goruntude celisiyor — orn.
+Data/train/1138/live/016365.jpg klasorde "live" altinda ama JSON'da hem
+spoof_type=7 (PC) hem binary_label=1 (spoof) diyor; JSON kendi icinde
+tutarli, yani hata klasor yerlesiminde. --metas_dir verildiginde bu
+script JSON'daki binary_label'i esas alir (klasoru DEGIL) ve
+uyusmayan goruntuleri output_dir/label_corrections.csv'ye loglar.
 
 Kullanim (Colab):
     python scripts/03_build_splits.py
@@ -28,6 +36,7 @@ Kullanim (Colab):
 """
 
 import argparse
+import json
 import random
 import sys
 from pathlib import Path
@@ -45,16 +54,42 @@ SPOOF_TYPE_NAMES = {
 }
 
 
-def load_spoof_type_lookup(metas_dir: Path) -> dict:
-    """metas/ altindaki train_label.txt / test_label.txt dosyalarini bulup
+def load_label_lookup(metas_dir: Path) -> dict:
+    """metas/ altindaki train_label.json / test_label.json dosyalarini bulup
     parse eder. Anahtar: "<subject_id>/<live|spoof>/<filename>" (son 3 path
-    parcasi) -> spoof_type_name. Dosya bulunamaz/parse edilemezse bos dict doner.
+    parcasi) -> (spoof_type_name, binary_label_id [0=live, 1=spoof]).
+    Dosya bulunamaz/parse edilemezse bos dict doner.
+
+    NOT: Bazi Kaggle mirror'larinda (orn. mabdullahsajid/celeba-spoofing)
+    train_label.txt/test_label.txt SADECE "<path> <binary_label>" (2 kolon)
+    iceriyor — resmi 44 kolonlu format degil. Resmi 44-elemanli label vektoru
+    (spoof_type index 40, binary label index 43) sadece .json dosyalarinda
+    (path -> list[44] dict) bulunuyor, bu yuzden .json tercih edilir;
+    .txt sadece (44 kolonlu olmasi durumunda) fallback'tir.
     """
     lookup = {}
-    label_files = list(metas_dir.rglob("train_label.txt")) + list(metas_dir.rglob("test_label.txt"))
+    json_files = list(metas_dir.rglob("train_label.json")) + list(metas_dir.rglob("test_label.json"))
 
+    if json_files:
+        for label_file in json_files:
+            with open(label_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            for rel_path, vec in data.items():
+                if len(vec) < 44:
+                    continue
+                try:
+                    spoof_type_id = int(vec[40])
+                    binary_id = int(vec[43])
+                except (ValueError, TypeError):
+                    continue
+                key = "/".join(rel_path.replace("\\", "/").split("/")[-3:])
+                lookup[key] = (SPOOF_TYPE_NAMES.get(spoof_type_id, f"unknown_{spoof_type_id}"), binary_id)
+        print(f"label lookup: {len(json_files)} json dosyasindan {len(lookup)} kayit yuklendi.")
+        return lookup
+
+    label_files = list(metas_dir.rglob("train_label.txt")) + list(metas_dir.rglob("test_label.txt"))
     if not label_files:
-        print(f"[UYARI] {metas_dir} altinda train_label.txt/test_label.txt bulunamadi. "
+        print(f"[UYARI] {metas_dir} altinda train_label.json/txt bulunamadi. "
               f"spoof_type 'unknown' olarak doldurulacak.")
         return lookup
 
@@ -67,25 +102,45 @@ def load_spoof_type_lookup(metas_dir: Path) -> dict:
                 rel_path = parts[0].replace("\\", "/")
                 try:
                     spoof_type_id = int(parts[40])
+                    binary_id = int(parts[43])
                 except ValueError:
                     continue
                 key = "/".join(rel_path.split("/")[-3:])
-                lookup[key] = SPOOF_TYPE_NAMES.get(spoof_type_id, f"unknown_{spoof_type_id}")
+                lookup[key] = (SPOOF_TYPE_NAMES.get(spoof_type_id, f"unknown_{spoof_type_id}"), binary_id)
 
-    print(f"spoof_type lookup: {len(label_files)} label dosyasindan {len(lookup)} kayit yuklendi.")
+    print(f"label lookup: {len(label_files)} txt dosyasindan {len(lookup)} kayit yuklendi.")
     return lookup
 
 
-def build_metadata(processed_dir: Path, spoof_type_lookup: dict) -> pd.DataFrame:
-    rows = []
-    for _split, subject_id, label, img_path in iter_split_subject_label_images(processed_dir):
-        key = f"{subject_id}/{label}/{img_path.name}"
-        spoof_type = spoof_type_lookup.get(key, "Live" if label == "live" else "unknown")
+def build_metadata(processed_dir: Path, label_lookup: dict) -> tuple:
+    """Doner: (df, corrections_df). corrections_df, klasor-tabanli etiketin
+    resmi JSON binary_label'iyla celistigi (ve JSON'a gore duzeltilen)
+    goruntuleri listeler — bkz. modul docstring'indeki bilinen veri hatasi.
+    """
+    rows, corrections = [], []
+    for _split, subject_id, folder_label, img_path in iter_split_subject_label_images(processed_dir):
+        key = f"{subject_id}/{folder_label}/{img_path.name}"
+        folder_label_id = 0 if folder_label == "live" else 1
+        entry = label_lookup.get(key)
+
+        if entry is not None:
+            spoof_type, label_id = entry
+            if label_id != folder_label_id:
+                corrections.append({
+                    "image_path": str(img_path),
+                    "folder_label": folder_label,
+                    "corrected_label": "live" if label_id == 0 else "spoof",
+                    "spoof_type": spoof_type,
+                })
+        else:
+            spoof_type = "Live" if folder_label == "live" else "unknown"
+            label_id = folder_label_id
+
         rows.append({
             "image_path": str(img_path),
             "subject_id": subject_id,
-            "label": label,
-            "label_id": 0 if label == "live" else 1,
+            "label": "live" if label_id == 0 else "spoof",
+            "label_id": label_id,
             "spoof_type": spoof_type,
         })
 
@@ -96,7 +151,7 @@ def build_metadata(processed_dir: Path, spoof_type_lookup: dict) -> pd.DataFrame
             f"<split>/<subject_id>/<live|spoof>/<image> seklinde mi kontrol et."
         )
 
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows), pd.DataFrame(corrections)
 
 
 def subject_disjoint_split(
@@ -166,13 +221,20 @@ def main() -> None:
     output_dir = Path(args.output_dir) if args.output_dir else default_splits_dir(str(drive_root))
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    spoof_type_lookup = {}
+    label_lookup = {}
     if args.metas_dir:
-        spoof_type_lookup = load_spoof_type_lookup(Path(args.metas_dir))
+        label_lookup = load_label_lookup(Path(args.metas_dir))
 
     print(f"Taraniyor: {processed_dir}")
-    df = build_metadata(processed_dir, spoof_type_lookup)
+    df, corrections_df = build_metadata(processed_dir, label_lookup)
     print(f"Toplam goruntu: {len(df)}, toplam subject: {df['subject_id'].nunique()}")
+
+    if len(corrections_df) > 0:
+        print(f"[DUZELTME] {len(corrections_df)} goruntude klasor-tabanli etiket resmi JSON "
+              f"metadata'siyla celisiyordu; JSON binary_label'i esas alinarak duzeltildi.")
+        corrections_path = output_dir / "label_corrections.csv"
+        corrections_df.to_csv(corrections_path, index=False)
+        print(f"Duzeltilen goruntulerin detayi: {corrections_path}")
 
     df = subject_disjoint_split(df, args.train_ratio, args.val_ratio, args.seed)
 
