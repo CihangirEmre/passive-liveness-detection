@@ -23,6 +23,17 @@ class DINOv2Backbone(nn.Module):
         for param in self.backbone.parameters():
             param.requires_grad = trainable
 
+    def set_unfreeze_last_n_blocks(self, n: int) -> None:
+        """Faz A.2.2 — kademeli unfreeze: tum backbone'u dondurur, sonra son
+        n transformer blogunu (self.backbone.blocks[-n:]) tekrar egitilebilir
+        yapar. n<=0 ise backbone tamamen frozen kalir (A.2.1 davranisi)."""
+        self.set_backbone_trainable(False)
+        if n <= 0:
+            return
+        for block in self.backbone.blocks[-n:]:
+            for param in block.parameters():
+                param.requires_grad = True
+
     def forward(self, x: torch.Tensor) -> dict:
         """x: (B, 3, H, W) — H ve W, PATCH_SIZE'in katı olmalı (224 veya 518).
 
