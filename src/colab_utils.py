@@ -64,12 +64,28 @@ def default_processed_dedup_dir(project_root: str = DEFAULT_DRIVE_PROJECT_ROOT) 
     return Path(project_root) / "processed_dedup"
 
 
+def _warn_if_local_content_path(path: Path) -> Path:
+    """default_* fonksiyonlari /content/... gibi Colab'a ozel mutlak yollar
+    donduruyor. Colab disinda (Windows/local) bu yol sessizce sürücü kokune
+    (orn. C:\\content\\...) yazar — script'i --output_dir vermeden local
+    calistirmanin bilinen bir tuzagi (bkz. dinov2_liveness_plan.md RISKLER).
+    Bu fonksiyon sadece is_colab()=False iken bir uyari basar, davranisi
+    degistirmez (var olan cagrilari bozmamak icin)."""
+    if not is_colab():
+        print(f"[colab_utils] UYARI: Colab disindasin ama '{path}' gibi /content'e "
+              f"ozel bir varsayilan yol kullaniliyor — local'de bu, mevcut surucu "
+              f"kokune yazar (orn. C:\\content\\...). Yanlislikla sistem surucusunu "
+              f"doldurmamak icin script'i --output_dir/--zip_dir ile ACIKCA "
+              f"gecilen bir yerel yolla calistir.")
+    return path
+
+
 def default_raw_dir(project_root: str = DEFAULT_DRIVE_PROJECT_ROOT) -> Path:
     """SECILEREK cikarilan (max_per_group ile sinirli) ham goruntuler buraya,
     Colab session storage'a (/content) yazilir — kucuk bir alt kume oldugu
     icin (tum veri seti degil) yerel disk sorun cikarmaz, hizli okuma saglar.
     """
-    return Path("/content/celeba_spoof_raw")
+    return _warn_if_local_content_path(Path("/content/celeba_spoof_raw"))
 
 
 def default_raw_zip_dir(project_root: str = DEFAULT_DRIVE_PROJECT_ROOT) -> Path:

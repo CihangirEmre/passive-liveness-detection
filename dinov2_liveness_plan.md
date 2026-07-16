@@ -91,6 +91,52 @@ resize + %20 margin uygulayan ayrı bir preprocessing fonksiyonu yaz."
 
 ---
 
+### A.1.5 — Veri Hacmini Artırma (İsteğe Bağlı Genişletme: ~30K → 90-100K)
+
+A.2.2'de gözlemlenen overfitting (bkz. A.2.2 Öneri bölümü) sonrası, backbone artık kısmen eğitilebilir olduğu için daha fazla veri gerçek fayda sağlayabilir hale geldi (A.2.1'de — sadece linear head, 1538 parametre — bu gerekli değildi, ezberleme kapasitesi yoktu).
+
+**Mekanizma:** `scripts/01_download_celeba_spoof.py --max_per_group N` — her (split, subject_id, label) grubundan (yani her subject'in live/spoof klasöründen) en fazla N görüntü seçer. Grup listesi metadata'nın TAMAMINDAN çıkarılır — `max_per_group` sadece grup İÇİ örnekleme sınırıdır, hangi subject'lerin dahil olduğunu etkilemez. Yani mevcut ~30K seçim zaten CelebA-Spoof'un ~9193 subject'inin tamamını kapsıyor; N'i artırmak **subject/identity çeşitliliğini bozmaz** — sadece subject başına örnek (farklı poz/an/spoof sunumu) çeşitliliğini artırır.
+
+```yaml
+mevcut_durum: "~36K ham goruntu (processed), tam zip'te 18063 grup, grup basina medyan 30 / ortalama 31.1 goruntu"
+hedef: "90-100K ham goruntu (crop+dedup sonrasi tahmini ~85-95K)"
+```
+
+**Kalibrasyon SONUCU (tam zip'in namelist'i uzerinden hesaplandi, tahmin degil — H:/celeba_spoof_zip/celeba-spoofing.zip zaten yerelde mevcut oldugu icin Kaggle'a hic istek atmadan, sadece zip index'i okunarak):**
+
+| max_per_group | secilecek ham goruntu |
+|---|---|
+| 3 | 53,745 |
+| 4 | 71,206 |
+| **5** | **88,448** |
+| **6** | **105,486** |
+| 7 | 122,319 |
+| 8 | 138,981 |
+
+**Karar: `max_per_group=6`** (105,486 ham) — onceki kucuk denemeye (max_per_group≈2) kiyasla subject basina cok daha fazla goruntu secilecegi icin 02b dedup'ta daha yuksek near-duplicate orani beklenir; 105K'dan basitleyip dedup sonrasi 90-100K'ya inmek, 5'ten (88K ham, dedup sonrasi 90K altina dusme riski var) daha guvenli bir tampon birakiyor.
+
+**Zip zaten yerelde oldugu icin indirme adimi atlanir:** `download_dataset()` fonksiyonu hedef zip adiyla ayni isimli bir dosya bulunca ("celeba-spoofing.zip") Kaggle indirmesini otomatik atlar. Komut:
+```bash
+python scripts/01_download_celeba_spoof.py --mode zip --zip_dir H:/celeba_spoof_zip --max_per_group 6 --keep_zip
+```
+
+**ÖNEMLİ — bu bir EKLEME değil, YENİDEN ÖRNEKLEME:** `max_per_group` değiştiğinde, aynı seed (42) olsa bile her gruptan çekilen örnek seti DEĞİŞİR (`random.Random.sample()` çağrısı `k` değiştiğinde farklı sonuç verir) — yani yeni ~90-100K'lik seçim, mevcut ~30K'lik seçimin bir üst kümesi DEĞİLDİR, kısmen farklı görüntüler içerir. Bu nedenle **tüm pipeline'ın (01→02→02b→03→04) baştan çalıştırılması gerekir**, mevcut `processed_dedup` klasörüne "ekleme" yapılamaz.
+
+**Split kararlılığı (iyi haber):** `03_build_splits.py`'nin subject→split atama mantığı (`subject_disjoint_split`), yalnızca *hangi subject_id'lerin var olduğuna* ve sabit seed'e (42) bağlıdır — subject seti pratikte aynı kaldığı için (aynı ~9193 subject, sadece daha fazla görüntüyle) yeniden çalıştırma train/val/test subject atamasını DEĞİŞTİRMEZ. Subject leakage riski bu genişletmeyle artmaz.
+
+**Dikkat edilecekler:**
+- 02b (phash dedup) daha kritik hale gelir — subject başına daha fazla görüntü, near-duplicate (aynı oturumdan ardışık kareler) olasılığını artırır; script değişmeden aynı şekilde çalışır, sadece daha çok iş yapar.
+- Checkpoint dosya adları (`linear_probe_a2_1.pt`, `finetune_a2_2_u2.pt`) veri boyutunu kodlamaz — yeni veriyle eğitim öncesi mevcut ~30K checkpoint'lerini (ve history CSV'lerini) ayrı bir klasöre yedekleyin, aksi halde üzerine yazılır.
+- Zip oluştururken PowerShell `Compress-Archive` KULLANILMAMALI (bkz. RİSKLER bölümü — backslash-separator bug'ı Linux/Colab'da extraction'ı bozar) — Kullanıcı ziplemeyi kendisi yapıcak.
+
+**Kabul Kriteri:**
+- [ ] Ham görüntü sayısı 90-100K aralığında (kalibrasyon adımıyla doğrulanmış)
+- [ ] Subject sayısı değişmedi / subject-disjoint assert hâlâ PASS
+- [ ] Yeni `data_stats_report.md` üretildi, spoof_type dağılımı hâlâ makul dengeli
+- [ ] A.2.1 + A.2.2 yeni veriyle tekrar çalıştırılıp eski (~30K) sonuçlarla (val_acer, overfitting derecesi) karşılaştırıldı
+
+---
+
 ### A.2 — Training Stratejisi (Kademeli)
 
 DINOv2 iki alt-adımda eğitilir; ikinci adıma birinci adım tamamlanmadan geçilmez.
@@ -121,6 +167,21 @@ input_variant_test: 224 vs 518 çözünürlük karşılaştırması (opsiyonel, 
 ```
 
 **Neden discriminative LR:** Backbone zaten güçlü genel özellikler öğrenmiş; büyük LR ile bunu bozmamak gerekir. Head ise sıfırdan spoofing-özel ayrımı öğrenmeli.
+
+### Öneri — Overfitting Azaltma (A.2.2, gözlemlenen bulguya dayanarak)
+
+İlk A.2.2 denemesinde (`unfreeze_blocks=2`) net bir overfitting deseni gözlemlendi: `train_acc` epoch7'de %100'e ulaşıp `train_loss` ~0'a inerken, `val_loss` epoch4'ten sonra sürekli arttı (`val_acer` buna rağmen hafifçe iyileşmeye devam etti — yani model train setinde aşırı özgüvenli hale geliyor, karar sınırı nispeten sağlam kalıyor). İki düşük riskli, standart önlem:
+
+```yaml
+label_smoothing: 0.1     # nn.CrossEntropyLoss(label_smoothing=0.1) — modelin train
+                          # setinde asiri ozguvenli (loss->0) hale gelmesini dogrudan
+                          # frenler, val_loss ayrisma egilimini azaltir.
+weight_decay: 0.01-0.05  # AdamW param group'larina acikca eklenir; unfreeze edilen
+                          # backbone bloklari icin daha yuksek (orn. 0.05), head icin
+                          # dusuk (0.01) tutulabilir.
+```
+
+**Neden bu ikisi:** Düşük riskli (mevcut sonucu bozma ihtimali düşük), tek satırlık değişiklikle uygulanabilir, gözlemlenen "aşırı özgüven" belirtisini doğrudan hedefliyor. Agresif augmentasyon veya mixup/cutmix bilinçli olarak dışlandı (bkz. A.1 augmentasyon kısıtı — liveness sinyali texture/renkte taşınır, bozulmamalı; mixup ayrıca live/spoof karışımı anlamsız etiketler üretir).
 
 ### Kabul Kriteri (A.2 geneli)
 - [ ] Val ACER, linear probing sonucundan belirgin şekilde daha iyi
@@ -250,6 +311,8 @@ loss: feature-level (head-aware correlation matrix ile boyut uyumu) + logits-lev
 4. **Teacher-student boyut uyumsuzluğu (Faz B):** Head-aware correlation matrix olmadan feature-level distillation doğrudan uygulanamaz — bu adımı atlamaya çalışma.
 5. **Faz B'ye erken geçiş:** Faz A'nın generalization raporu tamamlanmadan Faz B'ye başlanırsa, kötü bir teacher'ın hatalarını student'a damıtmış olursun. Sıra kesinlikle korunmalı.
 6. **Lisans/etik:** CelebA-Spoof, LCC-FASD — hiçbiri demo'da ham görüntü olarak gösterilmemeli, sadece kendi çektiğin test görüntüleri demo'da kullanılmalı.
+7. **Zip path separator (Windows→Colab):** PowerShell `Compress-Archive`, zip içi yolları backslash (`\`) ile saklıyor — Linux/Colab'da `zipfile.extractall()` bunu tek düz dosya adı sanıyor, gerçek klasör yapısı oluşmuyor. Python `zipfile` ile `arcname = p.relative_to(src).as_posix()` kullanılmalı.
+8. **Veri hacmi artırma sonrası checkpoint üzerine yazma (A.1.5):** `max_per_group` değiştirilip pipeline yeniden çalıştırıldığında, checkpoint dosya adları veri boyutunu kodlamadığı için mevcut (~30K) checkpoint/history dosyaları yedeklenmeden üzerine yazılabilir.
 
 ---
 
