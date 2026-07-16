@@ -15,8 +15,12 @@ batch_size=128, limit=0 -> tum veri; plan.md A.2.1 ile uyumlu). Pipeline
 dogrulamasi (SMOKE TEST) icin kucuk degerlerle acikca override edilir:
 --epochs 1 --batch_size 32 --limit 1000.
 
-Checkpoint her zaman SON epoch'un (early stopping tetiklenirse durulan
-epoch'un) agirliklarini kaydeder — en iyi val_acer'a gore secim yapilmiyor.
+Egitim sonunda IKI checkpoint kaydedilir: `<isim>.pt` (SON epoch'un —
+early stopping tetiklenirse durulan epoch'un — agirliklari) ve
+`<isim>_best.pt` (en dusuk val_acer'a sahip epoch'un agirliklari, patience=0
+iken de takip edilir). "En iyi" secimi val_acer'a gore yapilir, val_loss'a
+gore degil (bkz. A.2.2 Oneri bolumu — val_loss erken overfit olsa da
+val_acer daha uzun sure iyilesmeye devam edebiliyor).
 
 Kullanim (Colab, A.2.1 baseline — Drive mount edilmis, varsayilan yollar, A100 onerilir):
     from google.colab import drive
@@ -54,6 +58,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.colab_utils import mount_drive, default_splits_dir, default_processed_dedup_dir
 from src.dataset import CelebASpoofSplitDataset, build_transform
 from src.model_dinov2 import DINOv2Backbone, EMBED_DIM
+
+
+def _clone_state_dict(module: nn.Module) -> dict:
+    """state_dict() tensor REFERANSLARI dondurur — optimizer sonraki
+    epoch'larda bu tensorlari yerinde (in-place) guncelledigi icin, klonlamadan
+    saklarsak 'en iyi epoch' anlik goruntusu sessizce son epoch'a donusur."""
+    return {k: v.detach().clone().cpu() for k, v in module.state_dict().items()}
 
 
 def set_seed(seed: int) -> None:
@@ -213,6 +224,8 @@ def main() -> None:
 
     history = []
     best_val_acer = float("inf")
+    best_epoch = None
+    best_head_state, best_backbone_state = None, None
     epochs_without_improve = 0
     for epoch in range(1, args.epochs + 1):
         t0 = time.time()
@@ -234,16 +247,22 @@ def main() -> None:
             "elapsed_sec": elapsed,
         })
 
-        if args.patience > 0:
-            if val_m["acer"] < best_val_acer:
-                best_val_acer = val_m["acer"]
-                epochs_without_improve = 0
-            else:
-                epochs_without_improve += 1
-                if epochs_without_improve >= args.patience:
-                    print(f"\nErken durdurma: val_acer {args.patience} epoch'tur iyilesmedi "
-                          f"(en iyi val_acer={best_val_acer:.1%}).")
-                    break
+        # En iyi epoch takibi — early stopping'den (patience) BAGIMSIZ, patience=0
+        # (A.2.1 varsayilani) iken de calisir, cunku _best.pt her zaman uretilir.
+        if val_m["acer"] < best_val_acer:
+            best_val_acer = val_m["acer"]
+            best_epoch = epoch
+            best_head_state = _clone_state_dict(model.head)
+            if args.unfreeze_blocks > 0:
+                best_backbone_state = _clone_state_dict(model.backbone)
+            epochs_without_improve = 0
+        else:
+            epochs_without_improve += 1
+
+        if args.patience > 0 and epochs_without_improve >= args.patience:
+            print(f"\nErken durdurma: val_acer {args.patience} epoch'tur iyilesmedi "
+                  f"(en iyi val_acer={best_val_acer:.1%}, epoch {best_epoch}).")
+            break
 
     if limit is not None:
         ckpt_name = "smoketest_linear_probe.pt" if args.unfreeze_blocks == 0 else f"smoketest_finetune_u{args.unfreeze_blocks}.pt"
@@ -258,6 +277,18 @@ def main() -> None:
         checkpoint["backbone_state_dict"] = model.backbone.state_dict()
     torch.save(checkpoint, ckpt_path)
 
+    best_ckpt_path = output_dir / (ckpt_path.stem + "_best.pt")
+    best_checkpoint = {
+        "head_state_dict": best_head_state,
+        "args": vars(args),
+        "history": history,
+        "best_epoch": best_epoch,
+        "best_val_acer": best_val_acer,
+    }
+    if args.unfreeze_blocks > 0:
+        best_checkpoint["backbone_state_dict"] = best_backbone_state
+    torch.save(best_checkpoint, best_ckpt_path)
+
     history_path = output_dir / (ckpt_path.stem + "_history.csv")
     with open(history_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=list(history[0].keys()))
@@ -265,7 +296,8 @@ def main() -> None:
         writer.writerows(history)
 
     print("\n--- Egitim tamamlandi ---")
-    print(f"Checkpoint (en son epoch'un agirliklari, en iyi degil): {ckpt_path}")
+    print(f"Checkpoint (en son epoch'un agirliklari): {ckpt_path}")
+    print(f"Checkpoint (en iyi val_acer, epoch {best_epoch}, val_acer={best_val_acer:.1%}): {best_ckpt_path}")
     print(f"Epoch gecmisi (kalici): {history_path}")
 
 
