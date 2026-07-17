@@ -10,31 +10,11 @@ Faz A.2 — DINOv2 uzerine iki asamali egitim, ayni script'ten:
     (varsayilan 1e-5). CosineAnnealingLR scheduler ve val_acer'a gore early
     stopping (--patience) sadece unfreeze_blocks>0 iken devrede.
 
-Varsayilan degerler A.2.1 GERCEK BASELINE'ina gore ayarlanmistir (epochs=12,
-batch_size=128, limit=0 -> tum veri; plan.md A.2.1 ile uyumlu). Pipeline
-dogrulamasi (SMOKE TEST) icin kucuk degerlerle acikca override edilir:
---epochs 1 --batch_size 32 --limit 1000.
-
-Egitim sonunda IKI checkpoint kaydedilir: `<isim>.pt` (SON epoch'un —
-early stopping tetiklenirse durulan epoch'un — agirliklari) ve
-`<isim>_best.pt` (en dusuk val_acer'a sahip epoch'un agirliklari, patience=0
-iken de takip edilir). "En iyi" secimi val_acer'a gore yapilir, val_loss'a
-gore degil (bkz. A.2.2 Oneri bolumu — val_loss erken overfit olsa da
-val_acer daha uzun sure iyilesmeye devam edebiliyor).
-
-Kullanim (Colab, A.2.1 baseline — Drive mount edilmis, varsayilan yollar, A100 onerilir):
-    from google.colab import drive
-    drive.mount('/content/drive')
-    !python src/train.py
 
 Kullanim (Colab, A.2.2 kademeli unfreeze — son 2 blok, discriminative LR, early stopping):
     !python src/train.py --unfreeze_blocks 2 --epochs 20 --patience 5
 
-Kullanim (smoke test — pipeline'i hizlica dogrulamak icin, unfreeze ile de denenebilir):
-    !python src/train.py --epochs 1 --batch_size 32 --limit 1000
-    !python src/train.py --unfreeze_blocks 2 --epochs 1 --batch_size 32 --limit 1000
-
-Kullanim (yollari acikca vererek, local veya Colab):
+Kullanim :
     python src/train.py \\
         --train_csv /content/drive/MyDrive/passive-liveness-dinov2/splits/train.csv \\
         --val_csv /content/drive/MyDrive/passive-liveness-dinov2/splits/val.csv \\
@@ -89,7 +69,7 @@ class DinoLivenessModel(nn.Module):
         if self.frozen:
             # Backbone tamamen frozen oldugunda dropout/stochastic davranisi
             # kapatmak icin daima eval() — disaridaki train()/eval()
-            # cagrilarindan bagimsiz. unfreeze_blocks>0 iken bu dal calismaz;
+            # cagrilarindan bagimsiz. unfreeze_blocks>0 iken bu dal calismaz
             # backbone'un train/eval modu run_epoch'taki model.train(is_train)
             # cagrisiyla belirlenir.
             self.backbone.eval()
@@ -101,11 +81,7 @@ class DinoLivenessModel(nn.Module):
 
 
 def run_epoch(model, loader, device, criterion, optimizer=None) -> dict:
-    """label_id sozlesmesi (bkz. 03_build_splits.py): 0=live (bona fide), 1=spoof (attack).
-    ACER = (APCER+BPCER)/2 — plan.md A.2.1 kabul kriteri.
-      APCER: gercek spoof'lardan live diye yanlis siniflandirilanlarin orani.
-      BPCER: gercek live'lardan spoof diye yanlis siniflandirilanlarin orani.
-    """
+
     is_train = optimizer is not None
     model.train(is_train)
 
