@@ -22,7 +22,6 @@ Kullanim (Colab):
 """
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
@@ -143,22 +142,8 @@ def main() -> None:
     report_path = output_dir / "internal_eval_report.md"
     report_path.write_text(report, encoding="utf-8")
     print(f"\nRapor kaydedildi: {report_path}")
-
-    # 06_evaluate_external.py'nin internal/external karsilastirmasini
-    # otomatik uretebilmesi icin makine-okunur bir ozet de kaydedilir.
-    metrics_json = {
-        "checkpoint": args.checkpoint,
-        "val_eer": val_eer,
-        "val_eer_threshold": val_eer_threshold,
-        "test_apcer": test_metrics["apcer"],
-        "test_bpcer": test_metrics["bpcer"],
-        "test_acer": test_metrics["acer"],
-        "test_eer": test_eer,
-        "test_auc": test_auc,
-    }
-    metrics_json_path = output_dir / "internal_eval_metrics.json"
-    metrics_json_path.write_text(json.dumps(metrics_json, indent=2), encoding="utf-8")
-    print(f"Metrikler (JSON, 06 icin): {metrics_json_path}")
+    print("\n(06_evaluate_external.py ile internal/external karsilastirmasi icin yukaridaki "
+          "ACER/EER/AUC degerlerini --internal_acer/--internal_eer/--internal_auc olarak kopyalayin.)")
 
 
 if __name__ == "__main__":

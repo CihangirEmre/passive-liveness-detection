@@ -22,17 +22,22 @@ spoof_manifest -> 1). Manifest'teki yollar Kaggle notebook'una ozel
 (/kaggle/input/...) oldugu icin sadece dosya adi alinip --images_root ile
 yeniden kurulur.
 
-Kullanim (Colab, internal rapordan gelen esikle, test split'i):
+Internal/external karsilastirma tablosu (opsiyonel): --internal_acer/--internal_eer/
+--internal_auc ile 05_evaluate_internal.py'nin konsola bastigi test sonuclarini
+elle kopyalayip verin — ayri bir JSON dosyasina bagimli DEGIL, cunku iki script
+farkli hucrelerde/oturumlarda calisip output_dir path'leri kolayca uyusmayabiliyor.
+
+Kullanim (Colab, internal rapordan gelen esik + karsilastirma icin):
     python scripts/06_evaluate_external.py \
         --checkpoint /content/drive/MyDrive/passive-liveness-dinov2/checkpoints_v2/finetune_a2_2_u2.pt \
         --live_manifest /content/LCC_FASD/LCC_FASD/CLIENT_TEST.txt \
         --spoof_manifest /content/LCC_FASD/LCC_FASD/IMPOSTER_TEST.txt \
         --images_root /content/LCC_FASD/LCC_FASD \
-        --threshold 0.4724
+        --threshold 0.4724 \
+        --internal_acer 0.0044 --internal_eer 0.0045 --internal_auc 0.9999
 """
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
@@ -49,7 +54,7 @@ def build_report(
     images_root: str, checkpoint_path: str, n_live: int, n_spoof: int,
     threshold: float, metrics_at_threshold: dict,
     ext_eer: float, ext_auc: float,
-    internal_metrics: dict,
+    internal_acer: float, internal_eer: float, internal_auc: float,
 ) -> str:
     lines = ["# External (Zero-Shot) Degerlendirme Raporu (Faz A.3)\n"]
     lines.append(f"**Checkpoint:** `{checkpoint_path}`")
@@ -67,16 +72,15 @@ def build_report(
         lines.append(f"| BPCER | {metrics_at_threshold['bpcer']:.2%} |")
         lines.append(f"| ACER | {metrics_at_threshold['acer']:.2%} |\n")
 
-    if internal_metrics is not None:
+    if internal_eer is not None and internal_auc is not None:
         lines.append("## Internal vs External Karsilastirma\n")
         lines.append("| Metrik | Internal (test) | External | Fark (external - internal) |")
         lines.append("|---|---|---|---|")
-        int_acer = internal_metrics["test_acer"]
         ext_acer = metrics_at_threshold["acer"] if metrics_at_threshold else None
-        if ext_acer is not None:
-            lines.append(f"| ACER | {int_acer:.2%} | {ext_acer:.2%} | {ext_acer - int_acer:+.2%} |")
-        lines.append(f"| EER | {internal_metrics['test_eer']:.2%} | {ext_eer:.2%} | {ext_eer - internal_metrics['test_eer']:+.2%} |")
-        lines.append(f"| AUC | {internal_metrics['test_auc']:.4f} | {ext_auc:.4f} | {ext_auc - internal_metrics['test_auc']:+.4f} |")
+        if internal_acer is not None and ext_acer is not None:
+            lines.append(f"| ACER | {internal_acer:.2%} | {ext_acer:.2%} | {ext_acer - internal_acer:+.2%} |")
+        lines.append(f"| EER | {internal_eer:.2%} | {ext_eer:.2%} | {ext_eer - internal_eer:+.2%} |")
+        lines.append(f"| AUC | {internal_auc:.4f} | {ext_auc:.4f} | {ext_auc - internal_auc:+.4f} |")
         lines.append(
             "\nBuyuk bir ACER/EER farki (external >> internal), modelin CelebA-Spoof'un "
             "kendi cekim/recapture pipeline'ina ozgu izlere fazla uyum sagladigini "
@@ -99,9 +103,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--threshold", type=float, default=None,
                          help="Internal val EER esigi (05_evaluate_internal.py ciktisi). "
                               "Verilmezse sadece esik-bagimsiz EER/AUC raporlanir.")
-    parser.add_argument("--internal_metrics_json", type=str, default=None,
-                         help="05'in urettigi docs/internal_eval_metrics.json — verilirse "
-                              "internal/external karsilastirma tablosu da eklenir.")
+    parser.add_argument("--internal_acer", type=float, default=None,
+                         help="05_evaluate_internal.py'nin konsola bastigi test ACER'i (orn. 0.0044). "
+                              "internal_eer ve internal_auc ile birlikte verilirse karsilastirma tablosu eklenir.")
+    parser.add_argument("--internal_eer", type=float, default=None,
+                         help="05'in konsola bastigi test EER'i.")
+    parser.add_argument("--internal_auc", type=float, default=None,
+                         help="05'in konsola bastigi test AUC'u.")
     parser.add_argument("--output_dir", type=str, default="docs")
     parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--num_workers", type=int, default=4)
@@ -146,15 +154,12 @@ def main() -> None:
         print("\n[UYARI] --threshold verilmedi, sabit esikte ACER/APCER/BPCER hesaplanmadi "
               "— sadece esik-bagimsiz EER/AUC raporlaniyor.")
 
-    internal_metrics = None
-    if args.internal_metrics_json:
-        internal_metrics = json.loads(Path(args.internal_metrics_json).read_text(encoding="utf-8"))
-
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     report = build_report(
         args.images_root, args.checkpoint, n_live, n_spoof,
-        args.threshold, metrics_at_threshold, ext_eer, ext_auc, internal_metrics,
+        args.threshold, metrics_at_threshold, ext_eer, ext_auc,
+        args.internal_acer, args.internal_eer, args.internal_auc,
     )
     report_path = output_dir / "external_eval_report.md"
     report_path.write_text(report, encoding="utf-8")
