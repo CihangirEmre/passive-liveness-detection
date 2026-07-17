@@ -22,6 +22,7 @@ Kullanim (Colab):
 """
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -32,38 +33,8 @@ from torch.utils.data import DataLoader
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.dataset import CelebASpoofSplitDataset, build_transform
+from src.eval_utils import load_checkpoint_model, run_inference
 from src.metrics import compute_apcer_bpcer_acer, compute_auc, compute_eer
-from src.model_dinov2 import EMBED_DIM, DINOv2Backbone
-from src.train import DinoLivenessModel
-
-
-def load_checkpoint_model(checkpoint_path: str, device: torch.device) -> tuple:
-    """Checkpoint'teki 'args' icindeki unfreeze_blocks'a gore dogru mimariyi
-    kurar, head (+ varsa backbone) agirliklarini yukler. (model, ckpt) doner.
-    """
-    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
-    unfreeze_blocks = ckpt["args"].get("unfreeze_blocks", 0)
-
-    model = DinoLivenessModel(unfreeze_blocks=unfreeze_blocks).to(device)
-    model.head.load_state_dict(ckpt["head_state_dict"])
-    if "backbone_state_dict" in ckpt and ckpt["backbone_state_dict"] is not None:
-        model.backbone.load_state_dict(ckpt["backbone_state_dict"])
-    model.eval()
-    return model, ckpt
-
-
-@torch.no_grad()
-def run_inference(model: torch.nn.Module, loader: DataLoader, device: torch.device) -> tuple:
-    """(labels, scores) doner — scores: modelin spoof (label=1) olasiligi."""
-    model.eval()
-    all_labels, all_scores = [], []
-    for images, labels in loader:
-        images = images.to(device)
-        logits = model(images)
-        probs = torch.softmax(logits, dim=1)[:, 1]
-        all_scores.append(probs.cpu().numpy())
-        all_labels.append(labels.numpy())
-    return np.concatenate(all_labels), np.concatenate(all_scores)
 
 
 def build_report(
@@ -172,6 +143,22 @@ def main() -> None:
     report_path = output_dir / "internal_eval_report.md"
     report_path.write_text(report, encoding="utf-8")
     print(f"\nRapor kaydedildi: {report_path}")
+
+    # 06_evaluate_external.py'nin internal/external karsilastirmasini
+    # otomatik uretebilmesi icin makine-okunur bir ozet de kaydedilir.
+    metrics_json = {
+        "checkpoint": args.checkpoint,
+        "val_eer": val_eer,
+        "val_eer_threshold": val_eer_threshold,
+        "test_apcer": test_metrics["apcer"],
+        "test_bpcer": test_metrics["bpcer"],
+        "test_acer": test_metrics["acer"],
+        "test_eer": test_eer,
+        "test_auc": test_auc,
+    }
+    metrics_json_path = output_dir / "internal_eval_metrics.json"
+    metrics_json_path.write_text(json.dumps(metrics_json, indent=2), encoding="utf-8")
+    print(f"Metrikler (JSON, 06 icin): {metrics_json_path}")
 
 
 if __name__ == "__main__":

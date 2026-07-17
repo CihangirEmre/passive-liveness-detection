@@ -71,3 +71,54 @@ class CelebASpoofSplitDataset(Dataset):
         if self.transform:
             image = self.transform(image)
         return image, int(row["label_id"])
+
+
+class ManifestPairDataset(Dataset):
+    """LCC-FASD tarzi veri setleri icin: live ve spoof goruntulerin yollari
+    AYRI iki metin dosyasinda (her satirda bir yol) listelenir — CelebA-Spoof
+    gibi klasor/CSV yapisi YOK.
+
+    NOT (kritik): LCC-FASD'in Kaggle sayfasindaki ornek kod client(genuine)=1,
+    imposter(spoof)=0 kullaniyor — bu projenin BASTAN BERI kullandigi
+    sozlesmenin (0=live, 1=spoof; bkz. 03_build_splits.py, metrics.py) TAM
+    TERSI. Bu yuzden burada bilerek live_manifest->0, spoof_manifest->1
+    olarak eslenir; Kaggle'in kendi ornek kodu DOGRUDAN kopyalanmamalidir.
+
+    Manifest'teki yollar genelde baska bir ortama (orn. Kaggle notebook'unun
+    /kaggle/input/... mount noktasi) ait MUTLAK yollardir ve Colab'da
+    calismaz — bu yuzden sadece dosya ADI alinip --images_root ile YENIDEN
+    insa edilir (CelebASpoofSplitDataset'teki portabilite yaklasimiyla ayni).
+    """
+
+    def __init__(
+        self,
+        live_manifest: str,
+        spoof_manifest: str,
+        images_root: str,
+        transform: Optional[transforms.Compose] = None,
+        limit: Optional[int] = None,
+    ):
+        live_paths = [
+            line.strip() for line in Path(live_manifest).read_text(encoding="utf-8").splitlines() if line.strip()
+        ]
+        spoof_paths = [
+            line.strip() for line in Path(spoof_manifest).read_text(encoding="utf-8").splitlines() if line.strip()
+        ]
+        self.items = [(p, 0) for p in live_paths] + [(p, 1) for p in spoof_paths]
+        if limit:
+            self.items = self.items[:limit]
+        self.images_root = Path(images_root)
+        self.transform = transform
+
+    def __len__(self) -> int:
+        return len(self.items)
+
+    def __getitem__(self, idx: int):
+        raw_path, label = self.items[idx]
+        filename = Path(raw_path.replace("\\", "/")).name
+        img_path = self.images_root / filename
+
+        image = Image.open(img_path).convert("RGB")
+        if self.transform:
+            image = self.transform(image)
+        return image, label
