@@ -1,17 +1,6 @@
 """
 05_evaluate_internal.py
 
-Faz A.3 — Faz A.2'de egitilmis bir checkpoint'i CelebA-Spoof TEST split'i
-uzerinde degerlendirir (internal degerlendirme; test split egitim/val
-sirasinda hic gorulmedi, subject-disjoint).
-
-Esik (threshold) secimi: plan.md'nin belirttigi gibi VAL split'inin EER
-noktasindan turetilir, sonra bu SABIT esik test split'ine uygulanir — esigi
-dogrudan test'e gore secmek (ornegin test'in kendi EER'i) iyimser/sizinti
-riski tasir, bu yuzden val->test ayrimi korunur.
-
-Cikti: konsola ozet + docs/internal_eval_report.md (toplam metrikler +
-spoof_type bazli APCER kirilimi).
 
 Kullanim (Colab):
     python scripts/05_evaluate_internal.py \

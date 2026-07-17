@@ -1,31 +1,6 @@
 """
 06_evaluate_external.py
 
-Faz A.3 — Faz A.2'de egitilmis checkpoint'i harici bir veri setinde (orn.
-LCC-FASD) ZERO-SHOT degerlendirir — bu veri setinde HICBIR fine-tuning
-yapilmaz, sadece inference.
-
-Esik (threshold): 05_evaluate_internal.py'nin INTERNAL val split'ten
-turettigi EER esigi buraya SABIT olarak verilir (--threshold). Esigi harici
-veri setinin kendi uzerinde yeniden kalibre etmek, "zero-shot generalization"
-testinin amacini bozar — cunku o zaman esik zaten harici veriye gore
-ayarlanmis olur, gercek bir zero-shot testi degil. --threshold vermezseniz
-sadece esik-bagimsiz metrikler (EER, AUC) raporlanir.
-
-Veri yapisi (LCC-FASD, Kaggle 'lcc-fasd' mirror'i): tum goruntuler tek bir
-duz klasorde (orn. LCC_FASD/), live/spoof ayrimi CLIENT_*.txt (genuine) ve
-IMPOSTER_*.txt (spoof) manifest dosyalariyla yapiliyor — her satirda bir
-goruntu yolu. NOT: Kaggle'in kendi ornek kodu client=1/imposter=0 kullaniyor,
-bu projenin sozlesmesinin (0=live, 1=spoof) TERSI — src/dataset.py'deki
-ManifestPairDataset bunu bilerek dogru yone cevirir (live_manifest -> 0,
-spoof_manifest -> 1). Manifest'teki yollar Kaggle notebook'una ozel
-(/kaggle/input/...) oldugu icin sadece dosya adi alinip --images_root ile
-yeniden kurulur.
-
-Internal/external karsilastirma tablosu (opsiyonel): --internal_acer/--internal_eer/
---internal_auc ile 05_evaluate_internal.py'nin konsola bastigi test sonuclarini
-elle kopyalayip verin — ayri bir JSON dosyasina bagimli DEGIL, cunku iki script
-farkli hucrelerde/oturumlarda calisip output_dir path'leri kolayca uyusmayabiliyor.
 
 Kullanim (Colab, internal rapordan gelen esik + karsilastirma icin):
     python scripts/06_evaluate_external.py \

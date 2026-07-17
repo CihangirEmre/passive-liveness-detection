@@ -1,10 +1,5 @@
 """
-04_stats_report.py
 
-03'un ciktisi (train/val/test.csv) uzerinden veri seti istatistik raporu
-uretir: toplam goruntu, live/spoof orani, spoof tipi dagilimi, subject
-sayisi (genel + split bazli) — hem konsola yazdirir hem de
-data_stats_report.md + sample_batch.png olarak kaydeder (A.1 kabul kriteri).
 
 Kullanim (Colab):
     python scripts/04_stats_report.py

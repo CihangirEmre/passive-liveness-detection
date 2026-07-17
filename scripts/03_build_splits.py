@@ -6,29 +6,6 @@ SUBJECT-DISJOINT train/val/test split uretir (varsayilan oran 70/15/15).
 Split, subject_id kumesi uzerinde yapilir ve her subject'in TUM goruntuleri
 ayni split'e atanir — boylece ayni kisi hem train hem test'te olamaz.
 
-Opsiyonel: --metas_dir verilirse (01'in indirdigi ham veri icindeki metas/
-klasoru), resmi CelebA-Spoof label dosyalarindan (train_label.json /
-test_label.json) spoof_type/illumination/environment bilgisi de eklenir.
-Label semasi resmi repo README'sinden dogrulanmistir
-(https://github.com/ZhangYuanhan-AI/CelebA-Spoof):
-    label_vector[40] = spoof type (0=Live, 1=Photo, 2=Poster, 3=A4,
-                                    4=Face Mask, 5=Upper Body Mask,
-                                    6=Region Mask, 7=PC, 8=Pad, 9=Phone,
-                                    10=3D Mask)
-    label_vector[41] = illumination condition
-    label_vector[42] = environment
-    label_vector[43] = live/spoof binary label
-Bu Kaggle mirror'inda metas/ bulunmayabilir — bu durumda spoof_type
-kolonu "unknown" ile doldurulur, binary live/spoof label klasor
-adindan alinir.
-
-BILINEN VERI HATASI (dogrulandi): mirror'in klasor yapisi (live/spoof)
-resmi JSON metadata'siyla ~149 goruntude celisiyor — orn.
-Data/train/1138/live/016365.jpg klasorde "live" altinda ama JSON'da hem
-spoof_type=7 (PC) hem binary_label=1 (spoof) diyor; JSON kendi icinde
-tutarli, yani hata klasor yerlesiminde. --metas_dir verildiginde bu
-script JSON'daki binary_label'i esas alir (klasoru DEGIL) ve
-uyusmayan goruntuleri output_dir/label_corrections.csv'ye loglar.
 
 Kullanim (Colab):
     python scripts/03_build_splits.py

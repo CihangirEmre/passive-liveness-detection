@@ -1,24 +1,6 @@
 """
 01_download_celeba_spoof.py
 
-CelebA-Spoof veri setini Kaggle API uzerinden indirir ve acar (Kaggle mirror,
-resmi Google Drive/Baidu dagitiminin yerine kullaniliyor). Colab'da (veya
-local'de smoke test icin) calistirilabilir.
-
-Gercek boyut ~78GB (Kaggle Data Explorer'dan dogrulandi) — bu, Colab'in
-tipik yerel diskine (~60-110GB, cogunlukla zaten kismen dolu) SIGMAYABILIR.
-Bu yuzden zip dosyasinin KENDISI varsayilan olarak Google Drive'a indirilir
-(bkz. src/colab_utils.default_raw_zip_dir), yerel /content'e degil — zipfile
-modulu Drive-mount edilmis dosyayi normal bir yol gibi okuyabiliyor. SADECE
-secilen (max_per_group ile sinirli) kucuk alt kume yerel /content'e
-cikarilir (hizli okuma icin). Drive'da en az ~80GB bos alan olmali.
-
-Varsayilan olarak zip'in TAMAMI acilmaz (625K+ goruntu Colab'in yerel diskini
-doldurabilir) — bunun yerine --max_per_group (varsayilan 20) ile her
-(subject_id, label) grubundan en fazla N goruntu SECILEREK cikarilir. Bu hem
-disk sorununu cozer hem de fine-tuning veri hacmini indirme asamasinda
-azaltir. Tam veri seti isteniyorsa --max_per_group 0 verilmeli.
-
 Kullanim (Colab):
 
     # kaggle.json'i Colab'a yukledikten ve Drive'i mount ettikten sonra:

@@ -6,20 +6,11 @@ goruntuleri (ayni cekim oturumunun art arda kareleri gibi) perceptual hash
 (pHash) ile tespit edip eler. Ayni (subject_id, label) grubu icinde
 calisir — farkli kisileri veya live/spoof'u birbirine karistirmaz.
 
-Tamamen Colab uzerinde calisir: girdi Drive'daki islenmis veri
-(02'nin ciktisi), cikti da (deduplike edilmis alt kume) Drive'a yazilir —
-hicbir goruntu local makineye inmez.
-
 Yontem: Her goruntunun pHash'i (hash_size=8 -> 64 bit) cikarilir. Ayni grup
 icinde, zaten "tutulan" bir goruntuye Hamming distance'i <= --threshold olan
 goruntuler duplicate sayilip elenir (greedy, goruntu sirasina gore).
-Bu SADECE 1. asama (ucuz, GPU'suz) dedup — near-exact frame duplicate'lerini
-temizler. Daha agresif, embedding-tabanli anlamsal dedup (2. asama) bilerek
-kapsam disi birakildi.
-
-Orijinal (02'nin ciktisi) goruntuler SILINMEZ/degistirilmez — bu script
-sadece "tutulan" goruntuleri ayri bir klasore kopyalar, boylece dedup
-sonucu begenilmezse orijinal veri seti hep geri donulebilir durumda kalir.
+Bu sadece — near-exact frame duplicate'lerini
+temizler. 
 
 Kullanim (Colab):
     python scripts/02b_dedupe_phash.py
