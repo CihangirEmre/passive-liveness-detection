@@ -50,7 +50,7 @@ def main() -> None:
     print("Canli demo basladi. Cikmak icin 'q' tusuna basin.")
 
     frame_idx = 0
-    last_label, last_score, last_bbox = None, None, None
+    tracked_faces = []  # [{"bbox": (x1,y1,x2,y2), "label": str, "score": float}, ...]
 
     fps, inference_fps = 0.0, 0.0
     fps_window_start = time.time()
@@ -67,32 +67,41 @@ def main() -> None:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(80, 80))
 
-        if len(faces) > 0:
-            x, y, w, h = max(faces, key=lambda f: f[2] * f[3])  # en buyuk (alan) yuz
-            last_bbox = (x, y, x + w, y + h)
+        if len(faces) > 0 and frame_idx % args.infer_every == 0:
+            bboxes = [(x, y, x + w, y + h) for (x, y, w, h) in faces]
 
-            if frame_idx % args.infer_every == 0:
-                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                pil_img = Image.fromarray(rgb)
-                cropped = crop_with_margin(pil_img, last_bbox, margin=args.margin)
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            pil_img = Image.fromarray(rgb)
+
+            tensors, valid_bboxes = [], []
+            for bbox in bboxes:
+                cropped = crop_with_margin(pil_img, bbox, margin=args.margin)
                 if cropped.width > 0 and cropped.height > 0:
                     face_resized = cropped.resize((224, 224), Image.BILINEAR)
-                    tensor = transform(face_resized).unsqueeze(0).to(device)
-                    with torch.no_grad():
-                        logits = model(tensor)
-                        score = torch.softmax(logits, dim=1)[0, 1].item()
-                    last_score = score
-                    last_label = "SPOOF" if score >= args.threshold else "LIVE"
-                    fps_inference_count += 1
-        else:
-            last_bbox = None
+                    tensors.append(transform(face_resized))
+                    valid_bboxes.append(bbox)
 
-        if last_bbox is not None:
-            x1, y1, x2, y2 = last_bbox
-            color = (0, 0, 255) if last_label == "SPOOF" else (0, 200, 0)
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-            if last_score is not None:
-                cv2.putText(frame, f"{last_label} ({last_score:.2%})", (x1, max(20, y1 - 10)),
+            tracked_faces = []
+            if tensors:
+                # Her yuz icin ayri forward pass yerine TEK batch halinde inference —
+                # DINOv2 backbone + head zaten [N,3,224,224] kabul ediyor.
+                batch = torch.stack(tensors).to(device)
+                with torch.no_grad():
+                    logits = model(batch)
+                    scores = torch.softmax(logits, dim=1)[:, 1].tolist()
+                for bbox, score in zip(valid_bboxes, scores):
+                    label = "SPOOF" if score >= args.threshold else "LIVE"
+                    tracked_faces.append({"bbox": bbox, "label": label, "score": score})
+                fps_inference_count += 1
+        elif len(faces) == 0:
+            tracked_faces = []
+
+        if tracked_faces:
+            for face in tracked_faces:
+                x1, y1, x2, y2 = face["bbox"]
+                color = (0, 0, 255) if face["label"] == "SPOOF" else (0, 200, 0)
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                cv2.putText(frame, f"{face['label']} ({face['score']:.2%})", (x1, max(20, y1 - 10)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
         else:
             cv2.putText(frame, "Yuz bulunamadi", (20, 40),
